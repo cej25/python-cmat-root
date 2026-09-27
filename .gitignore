@@ -33,6 +33,7 @@ python-cmat3d-config.txt
 
 # Local IDE / Agent metadata
 .agents/
+*.code-workspace
 
 # Local SQLite database & fit results
 *.db
