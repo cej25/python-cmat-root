@@ -53,6 +53,7 @@ except Exception:
     pass
 
 from cmat import CMATReader
+from root_matrix import ROOTMatrixReader, split_matrix_spec, matrix_spec, list_root_histograms
 
 CONFIG_FILENAME = "python-cmat-config.txt"
 
@@ -1630,7 +1631,7 @@ def print_fit_2d_terminal_report(res, filename, is_cal, verbosity="compact"):
     print(f"{bar}\n", flush=True)
 
 
-def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=None, cal=None, axis_label=None, title=None, grid_mode="both", peaks=None, fits_list=None):
+def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=None, cal=None, axis_label=None, title=None, grid_mode="both", peaks=None, fits_list=None, force_calibrated=False, channel_offset=0.0):
     """
     Generates a publication-quality 1D spectrum vector PDF with white background,
     Times New Roman font, inward ticks, stepped staircase histogram, optional calibration,
@@ -1675,11 +1676,11 @@ def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=No
     sub_x = np.arange(ch_start, ch_end + 1, dtype=np.float64)
     sub_y = spec[ch_start:ch_end + 1]
 
-    is_cal = is_calibrated_coeffs(cal)
+    is_cal = force_calibrated or is_calibrated_coeffs(cal)
     if is_cal:
-        plot_x = np.array([ch_to_energy(c, cal) for c in sub_x])
-        x_lim_0 = ch_to_energy(ch_start, cal)
-        x_lim_1 = ch_to_energy(ch_end, cal)
+        plot_x = np.array([ch_to_energy(c + channel_offset, cal) for c in sub_x])
+        x_lim_0 = ch_to_energy(ch_start + channel_offset, cal)
+        x_lim_1 = ch_to_energy(ch_end + channel_offset, cal)
         x_axis_name = axis_label or "Energy (keV)"
     else:
         plot_x = sub_x
@@ -1693,8 +1694,8 @@ def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=No
     for k in range(len(sub_x)):
         c = sub_x[k]
         val = sub_y[k]
-        x_left = ch_to_energy(c - 0.5, cal) if is_cal else (c - 0.5)
-        x_right = ch_to_energy(c + 0.5, cal) if is_cal else (c + 0.5)
+        x_left = ch_to_energy(c + channel_offset - 0.5, cal) if is_cal else (c - 0.5)
+        x_right = ch_to_energy(c + channel_offset + 0.5, cal) if is_cal else (c + 0.5)
         step_x.extend([x_left, x_right])
         step_y.extend([val, val])
 
@@ -2077,11 +2078,11 @@ def generate_pdf_2d(matrix, x0, x1, y0, y1, cmap_name="turbo", scale_mode="log",
     return buf.getvalue()
 
 
-def export_1d_ascii(filepath: Path, spec: np.ndarray, cal: list = None, header: str = "", dy: np.ndarray = None, is_gated: bool = False, bg_scale: float = 0.0) -> None:
+def export_1d_ascii(filepath: Path, spec: np.ndarray, cal: list = None, header: str = "", dy: np.ndarray = None, is_gated: bool = False, bg_scale: float = 0.0, force_calibrated: bool = False, channel_offset: float = 0.0) -> None:
     """Export 1D spectrum to ASCII .dat file with columns: Channel, Energy (if calibrated), Counts, Error."""
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    is_cal = is_calibrated_coeffs(cal)
+    is_cal = force_calibrated or is_calibrated_coeffs(cal)
     
     if dy is None:
         if is_gated and bg_scale > 0:
@@ -2096,7 +2097,7 @@ def export_1d_ascii(filepath: Path, spec: np.ndarray, cal: list = None, header: 
         if is_cal:
             f.write("# Channel\tEnergy_keV\tCounts\tError\n")
             for ch, (val, err) in enumerate(zip(spec, dy)):
-                e = ch_to_energy(ch, cal)
+                e = ch_to_energy(ch + channel_offset, cal)
                 f.write(f"{ch}\t{e:.4f}\t{val:.2f}\t{err:.2f}\n")
         else:
             f.write("# Channel\tCounts\tError\n")
@@ -4223,20 +4224,29 @@ class CMATSession:
         }
 
     def add_matrix_file(self, path: Path, name: str = None, cal: dict = None) -> int:
-        path = Path(path).resolve()
+        path, object_name = split_matrix_spec(path)
+        path = path.resolve()
+        source = matrix_spec(path, object_name)
         for idx, m in enumerate(self.matrices):
-            if m["path"] == str(path):
+            if m["path"] == source:
                 if name:
                     m["name"] = name
                 return idx
 
-        reader = CMATReader(path)
+        reader = ROOTMatrixReader(path, object_name) if path.suffix.lower() == ".root" else CMATReader(path)
+        if isinstance(reader, ROOTMatrixReader):
+            source = matrix_spec(path, reader.object_name)
+            for idx, m in enumerate(self.matrices):
+                if m["path"] == source:
+                    return idx
         mat = reader.to_numpy()
         proj_x = reader.get_projection(axis=0)
         proj_y = reader.get_projection(axis=1)
-        matrix_name = name or path.name
+        matrix_name = name or (f"{path.name}::{reader.object_name}" if isinstance(reader, ROOTMatrixReader) else path.name)
 
         matrix_cal = {0: list(self.cal[0]), 1: list(self.cal[1])}
+        if isinstance(reader, ROOTMatrixReader):
+            matrix_cal = {axis: list(coeffs) for axis, coeffs in reader.cal.items()}
         if cal:
             if isinstance(cal, dict):
                 for k, v in cal.items():
@@ -4253,7 +4263,7 @@ class CMATSession:
             "index": len(self.matrices),
             "name": matrix_name,
             "filename": path.name,
-            "path": str(path),
+            "path": source,
             "reader": reader,
             "matrix": mat,
             "proj": proj_x,
@@ -4265,6 +4275,7 @@ class CMATSession:
             "max_count": int(np.max(mat)),
             "nonzero_bins": int(np.count_nonzero(mat)),
             "is_symmetric": bool(reader.is_symmetric),
+            "is_1d": bool(isinstance(reader, ROOTMatrixReader) and reader.ndim == 1),
             "cal": matrix_cal,
         }
         self.matrices.append(entry)
@@ -4278,26 +4289,33 @@ class CMATSession:
     def select_matrix(self, identifier) -> int:
         if not self.matrices:
             raise ValueError("No matrices loaded in session.")
+        def activate(idx):
+            previous = self.get_active_matrix()
+            if previous and previous.get("is_1d", False) != self.matrices[idx].get("is_1d", False):
+                self.gates = {0: None, 1: None}
+                self.fits_1d = {0: None, 1: None}
+                self.search_peaks_1d = {0: [], 1: []}
+                self.bg_regions_1d = {0: [], 1: []}
+                self.integration_1d = {0: None, 1: None}
+                self.fit_2d = None
+            self.active_index = idx
+            return idx
         try:
             val = int(identifier)
             if 0 <= val < len(self.matrices):
-                self.active_index = val
-                return val
+                return activate(val)
             elif 1 <= val <= len(self.matrices):
-                self.active_index = val - 1
-                return val - 1
+                return activate(val - 1)
         except ValueError:
             pass
 
         ident_str = str(identifier).strip().lower()
         for idx, m in enumerate(self.matrices):
             if m["name"].lower() == ident_str or m["filename"].lower() == ident_str:
-                self.active_index = idx
-                return idx
+                return activate(idx)
         for idx, m in enumerate(self.matrices):
             if ident_str in m["name"].lower() or ident_str in m["filename"].lower():
-                self.active_index = idx
-                return idx
+                return activate(idx)
         raise KeyError(f"Matrix '{identifier}' not found in loaded matrices.")
 
     def close_matrix(self, identifier=None) -> None:
@@ -4340,6 +4358,9 @@ class CMATSession:
                 m["cal"][axis] = list(c)
 
     def is_calibrated(self, axis: int = 0) -> bool:
+        m = self.get_active_matrix()
+        if m and isinstance(m.get("reader"), ROOTMatrixReader) and int(axis) in m["reader"].cal:
+            return True
         return is_calibrated_coeffs(self.get_cal(axis))
 
     def get_spectrum(self, axis: int = 0) -> np.ndarray:
@@ -4504,7 +4525,7 @@ class CMATCommandInterpreter:
         print(" python-cmat Analysis Commands Reference:")
         print(bar)
         print("  Matrix & Session:")
-        print("    load <path> [alias]                 Load .cmat matrix file into session")
+        print("    load <path> [alias]                 Load .cmat or ROOT TH1/TH2 into session")
         print("    matrix <name_or_index>              Select active matrix for analysis")
         print("    list                                List all loaded matrices with indices and counts")
         print("    info                                Display active matrix metadata and calibrations")
@@ -4649,15 +4670,15 @@ class CMATCommandInterpreter:
             return
         path_str = args[0]
         alias = args[1] if len(args) > 1 else None
-        p = Path(path_str)
+        p, obj_name = split_matrix_spec(path_str)
         if not p.exists():
-            p_alt = Path(__file__).resolve().parent / path_str
+            p_alt = Path(__file__).resolve().parent / p
             if p_alt.exists():
                 p = p_alt
             else:
                 print(f"[!] Error: File '{path_str}' not found.", file=sys.stderr)
                 return
-        idx = self.session.add_matrix_file(p, name=alias)
+        idx = self.session.add_matrix_file(matrix_spec(p, obj_name), name=alias)
         self.session.active_index = idx
         m = self.session.matrices[idx]
         print(f"[*] Loaded [{idx + 1}] '{m['name']}' ({m['shape'][0]}×{m['shape'][1]}, {m['total_counts']:,} counts, symmetric={m['is_symmetric']})")
@@ -5224,7 +5245,9 @@ class CMATCommandInterpreter:
 
         pdf_bytes = generate_pdf_1d(
             spec, ch_start, ch_end, is_log=is_log, zoom_y=zoom_y, fit_res=fit_res,
-            cal=self.session.get_cal(axis), title=title, grid_mode=grid_mode, peaks=peaks
+            cal=self.session.get_cal(axis), title=title, grid_mode=grid_mode, peaks=peaks,
+            force_calibrated=self.session.is_calibrated(axis),
+            channel_offset=0.5 if isinstance(self.session.get_active_matrix()["reader"], ROOTMatrixReader) else 0.0
         )
         outfile.parent.mkdir(parents=True, exist_ok=True)
         outfile.write_bytes(pdf_bytes)
@@ -5295,7 +5318,10 @@ class CMATCommandInterpreter:
         hdr = f"Matrix: {m['name'] if m else 'unknown'} | Det {axis + 1} ({'X' if axis == 0 else 'Y'})"
         if is_gated:
             hdr += f" | Gated Coincidence Cut | BG scale: {bg_scale:.4f}"
-        export_1d_ascii(outfile, spec, cal=self.session.get_cal(axis), header=hdr, is_gated=is_gated, bg_scale=bg_scale)
+        is_root = bool(m and isinstance(m["reader"], ROOTMatrixReader))
+        export_1d_ascii(outfile, spec, cal=self.session.get_cal(axis), header=hdr, is_gated=is_gated,
+                        bg_scale=bg_scale, force_calibrated=self.session.is_calibrated(axis),
+                        channel_offset=0.5 if is_root else 0.0)
         print(f"[+] Exported 1D spectrum data: {outfile.resolve()}")
 
     def cmd_export_amat(self, args: list):
@@ -5569,7 +5595,8 @@ def browse_filesystem(req_path: str = "") -> dict:
                         if entry.name.startswith("."):
                             continue
                         is_dir = entry.is_dir(follow_symlinks=True)
-                        is_cmat = (not is_dir) and entry.name.lower().endswith(".cmat")
+                        is_cmat = (not is_dir) and entry.name.lower().endswith((".cmat", ".root"))
+                        is_root_matrix = (not is_dir) and entry.name.lower().endswith(".root")
                         is_txt = (not is_dir) and entry.name.lower().endswith(".txt")
                         is_fit = (not is_dir) and (entry.name.lower().startswith("fit_results") or (is_txt and "fit" in entry.name.lower()))
                         size = 0
@@ -5587,6 +5614,7 @@ def browse_filesystem(req_path: str = "") -> dict:
                             "path": str(Path(entry.path).resolve()),
                             "is_dir": is_dir,
                             "is_cmat": is_cmat,
+                            "is_root_matrix": is_root_matrix,
                             "is_txt": is_txt,
                             "is_fit": is_fit,
                             "size": size,
@@ -5689,6 +5717,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
         if active_mat:
             info["filename"] = active_mat["name"]
             info["filepath"] = active_mat["path"]
+            info["is_1d"] = active_mat.get("is_1d", False)
         session = self.get_session()
         c0 = session.get_cal(0)
         c1 = session.get_cal(1)
@@ -5727,6 +5756,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 "max_count": m["max_count"],
                 "nonzero_bins": m["nonzero_bins"],
                 "is_symmetric": m["is_symmetric"],
+                "is_1d": m.get("is_1d", False),
                 "cal_0": m.get("cal", {}).get(0, c0) if isinstance(m.get("cal"), dict) else c0,
                 "cal_1": m.get("cal", {}).get(1, c1) if isinstance(m.get("cal"), dict) else c1,
             }
@@ -5768,6 +5798,22 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res_data).encode("utf-8"))
+
+        elif self.path.startswith("/api/root_histograms"):
+            from urllib.parse import urlparse, parse_qs
+            req_path = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+            try:
+                path = Path(req_path).expanduser().resolve()
+                if path.suffix.lower() != ".root":
+                    raise ValueError("Expected a .root file")
+                payload = {"histograms": list_root_histograms(path)}
+                status = 200
+            except Exception as exc:
+                payload, status = {"error": str(exc)}, 400
+            self.send_response(status)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
 
         elif self.path.startswith("/api/select_matrix"):
             from urllib.parse import urlparse, parse_qs
@@ -6426,7 +6472,9 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     fits_list=fits_list,
                     cal=axis_cal,
                     grid_mode=grid_mode,
-                    peaks=peaks
+                    peaks=peaks,
+                    force_calibrated=session.is_calibrated(axis),
+                    channel_offset=0.5 if isinstance(self.reader, ROOTMatrixReader) else 0.0
                 )
                 self.send_response(200)
                 self.send_header("Content-type", "application/pdf")
@@ -6735,7 +6783,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             bg_scale = gate.get("scale", 0.0) if is_gated else 0.0
 
             x_arr = np.arange(len(spec), dtype=np.float64)
-            x_energy = np.array([ch_to_energy(ch, cal) for ch in range(len(spec))], dtype=np.float64) if is_calibrated_coeffs(cal) else None
+            is_root = bool(m and isinstance(m["reader"], ROOTMatrixReader))
+            x_energy = np.array([ch_to_energy(ch + (0.5 if is_root else 0.0), cal) for ch in range(len(spec))], dtype=np.float64) if session.is_calibrated(axis) else None
 
             if is_gated and bg_scale > 0:
                 dy_arr = np.sqrt(np.maximum(np.abs(spec), 1.0) * (1.0 + bg_scale))
@@ -6928,7 +6977,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             filename = query.get("filename", ["uploaded_matrix.cmat"])[0]
             safe_name = Path(filename).name
-            if not safe_name.endswith(".cmat"):
+            if not safe_name.lower().endswith((".cmat", ".root")):
                 safe_name += ".cmat"
 
             content_len = int(self.headers.get("Content-Length", 0))
@@ -6953,7 +7002,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     bytes_read += len(chunk)
 
             try:
-                new_idx = CMATWebHandler.add_matrix_file(target_path, name=safe_name, cal=self.cal)
+                upload_cal = None if target_path.suffix.lower() == ".root" else self.cal
+                new_idx = CMATWebHandler.add_matrix_file(target_path, name=safe_name, cal=upload_cal)
                 CMATWebHandler.active_index = new_idx
                 CMATWebHandler.sync_class_attrs()
                 m = CMATWebHandler.matrices[new_idx]
@@ -6980,7 +7030,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 if not path_str:
                     raise ValueError("No path provided")
 
-                target_path = Path(path_str).expanduser()
+                target_path, object_name = split_matrix_spec(path_str)
                 if not target_path.is_absolute():
                     target_path = (Path.cwd() / target_path).resolve()
                 else:
@@ -6989,7 +7039,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 if not target_path.exists():
                     raise FileNotFoundError(f"Matrix file not found: {target_path}")
 
-                new_idx = CMATWebHandler.add_matrix_file(target_path, cal=self.cal)
+                path_cal = None if target_path.suffix.lower() == ".root" else self.cal
+                new_idx = CMATWebHandler.add_matrix_file(matrix_spec(target_path, object_name), cal=path_cal)
                 CMATWebHandler.active_index = new_idx
                 CMATWebHandler.sync_class_attrs()
                 m = CMATWebHandler.matrices[new_idx]
@@ -7143,7 +7194,7 @@ def main():
         nargs="*",
         type=str,
         default=[],
-        help="Path to one or more input .cmat file(s) (e.g. run1.cmat run2.cmat or *.cmat)",
+        help="Input .cmat or ROOT TH1/TH2 file(s); choose a histogram with file.root::directory/hist",
     )
     parser.add_argument(
         "-m", "--macro",
@@ -7231,21 +7282,23 @@ def main():
     for item in args.input:
         matched = glob.glob(item)
         if matched:
-            file_paths.extend([Path(p) for p in sorted(matched)])
+            file_paths.extend(sorted(matched))
         else:
-            file_paths.append(Path(item))
+            file_paths.append(item)
 
     # De-duplicate while preserving CLI order
     seen = set()
     unique_paths = []
     for p in file_paths:
-        res = p.resolve()
+        raw_path, object_name = split_matrix_spec(p)
+        res = matrix_spec(raw_path, object_name)
         if res not in seen:
             seen.add(res)
             unique_paths.append(p)
 
     for p in unique_paths:
-        if not p.exists():
+        source_path, _ = split_matrix_spec(p)
+        if not source_path.exists():
             print(f"Error: File '{p}' not found.", file=sys.stderr)
             sys.exit(1)
 
@@ -7265,8 +7318,15 @@ def main():
         session.set_cal(1, args.cal_1)
 
     # Pre-load matrices if provided
+    explicit_cal = {}
+    if args.cal is not None:
+        explicit_cal = {0: args.cal, 1: args.cal}
+    if args.cal_0 is not None:
+        explicit_cal[0] = args.cal_0
+    if args.cal_1 is not None:
+        explicit_cal[1] = args.cal_1
     for p in unique_paths:
-        session.add_matrix_file(p)
+        session.add_matrix_file(p, cal=explicit_cal or None)
 
     # Check for Headless Mode: Macro, Batch Command, or Interactive REPL
     is_headless_mode = bool(args.macro or args.command or args.headless)

@@ -63,6 +63,7 @@ If Python 3 and pip are not yet installed on your system:
 sudo apt update && sudo apt install python3 python3-pip python3-venv
 ```
 *(Requires Python 3.8+, NumPy, SciPy, and Matplotlib).*
+ROOT histogram input additionally uses `uproot` (included in `requirements.txt`).
 
 #### Clone & Install Dependencies
 ```bash
@@ -99,7 +100,23 @@ The `pycmat` script automatically inspects the input `.cmat` headers and routes 
 
 # Open multiple 2D matrices for differential analysis
 ./pycmat run01.cmat run02.cmat run03.cmat
+
+# Open a ROOT TH2 histogram (including one in a ROOT subdirectory)
+./pycmat 'run.root::Coincidences/h2_Ge_gg'
+
+# Open a standalone ROOT TH1 spectrum with the same 1D search, fit and export tools
+./pycmat 'run.root::Spectra/h1_Ge_E'
 ```
+
+ROOT files containing exactly one TH1 or TH2 can be opened as `./pycmat run.root`.
+For files with several histograms, choose one with `file.root::directory/histogram`.
+The 2D viewer's server file browser also lists ROOT files and prompts for a
+histogram if necessary. TH1 opens as a full-width 1D spectrum with peak search,
+single and multiplet fitting, background regions, integration, PDF/data export,
+and the half-life tool. TH2 opens with the 2D matrix and two projections.
+ROOT bin contents and uniform axis spacing are preserved as calibrated energies.
+Underflow and overflow bins are excluded. ROOT TTrees, TH2Poly and TH3 objects
+are not supported by this viewer.
 
 #### Dedicated Viewers
 You can also launch the dedicated viewers directly:
@@ -261,4 +278,3 @@ This work was supported by a grant of the Romanian Ministry of Research, Innovat
 ## Disclaimer
 
 This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind.
-

@@ -348,6 +348,9 @@
     overflow: hidden;
   }
   .panel-1d canvas { width: 100%; height: 100%; flex: 1 1 0px; min-height: 0; background: #111; border-radius: 4px; cursor: crosshair; display: block; }
+  body.one-dimensional .two-d-only { display: none !important; }
+  body.one-dimensional .panel-1d-container { flex: 1; }
+  body.one-dimensional #panel1DX { flex: 1 1 auto; height: auto; }
   .panel-1d-header { display: flex; justify-content: space-between; align-items: stretch; gap: 6px; margin-bottom: 3px; min-width: 0; }
   .panel-1d-title-group { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
   .panel-1d-title { font-size: 0.78rem; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -741,7 +744,7 @@
     <!-- 0. Matrix Comparison & Active File -->
     <div class="control-group" id="groupMatrixManager">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-        <h3 style="margin: 0; color: #ffd600;">Active Matrix</h3>
+        <h3 style="margin: 0; color: #ffd600;">Active File</h3>
         <div style="display: flex; align-items: center; gap: 6px;">
           <span id="matrixCountBadge" class="badge" style="background:#263238; color:#ffd600; font-size:0.7rem;">1 / 1</span>
           <button id="btnHideSidebarTop" class="mini-btn-collapse" title="Collapse Menu [M]">&lt; Hide</button>
@@ -776,8 +779,8 @@
       <label style="margin-top: 6px;">1D Fit Region <span class="range-val" id="fwhmMultLabel1D">4.0× FWHM</span></label>
       <input type="range" id="fwhmMultSlider1D" min="1.0" max="10.0" step="0.5" value="4.0">
 
-      <label style="margin-top: 6px;">2D ROI Half-Width <span class="range-val" id="roiWidthLabel2D">±16 ch</span></label>
-      <input type="range" id="roiWidthSlider2D" min="6" max="36" step="2" value="16">
+      <label class="two-d-only" style="margin-top: 6px;">2D ROI Half-Width <span class="range-val" id="roiWidthLabel2D">±16 ch</span></label>
+      <input class="two-d-only" type="range" id="roiWidthSlider2D" min="6" max="36" step="2" value="16">
 
       <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #333;">
         <label>Results Verbosity</label>
@@ -814,8 +817,8 @@
     <!-- 4. Color & 1D Projections -->
     <div class="control-group">
       <h3>Color &amp; Projections</h3>
-      <label>Colormap [C]</label>
-      <select id="cmapSelect">
+      <label class="two-d-only">Colormap [C]</label>
+      <select class="two-d-only" id="cmapSelect">
         <option value="turbo" selected>Turbo (Rainbow Pro)</option>
         <option value="viridis">Viridis</option>
         <option value="plasma">Plasma</option>
@@ -825,23 +828,23 @@
         <option value="gray">Grayscale</option>
       </select>
 
-      <label style="margin-top: 6px;">Max Contrast <span class="range-val" id="vmaxLabel">500</span></label>
-      <input type="range" id="vmaxSlider" min="0" max="1000" step="1" value="500">
+      <label class="two-d-only" style="margin-top: 6px;">Max Contrast <span class="range-val" id="vmaxLabel">500</span></label>
+      <input class="two-d-only" type="range" id="vmaxSlider" min="0" max="1000" step="1" value="500">
 
-      <label style="margin-top: 6px;">Min Threshold <span class="range-val" id="vminLabel">1</span></label>
-      <input type="range" id="vminSlider" min="0" max="50" value="1">
+      <label class="two-d-only" style="margin-top: 6px;">Min Threshold <span class="range-val" id="vminLabel">1</span></label>
+      <input class="two-d-only" type="range" id="vminSlider" min="0" max="50" value="1">
 
       <label style="margin-top: 6px;">1D Energy / Channel Range</label>
       <select id="projRangeSelect">
         <option value="synced" selected>Synced with 2D Window Zoom</option>
-        <option value="full">Full 0..4095 Range</option>
+        <option value="full">Full Matrix Range</option>
       </select>
 
       <div style="margin-top: 6px; color: #69f0ae; font-size: 0.78rem;">1D Histogram Gridlines: Major &amp; Minor (Always On)</div>
     </div>
 
     <!-- 4. 1D Coincidence Gating -->
-    <div class="control-group">
+    <div class="control-group two-d-only">
       <h3 style="color: #69f0ae;">1D Coincidence Gating</h3>
       <div id="gateSidebarStatus" style="font-size: 0.72rem; color: #aaa; margin-bottom: 6px; line-height: 1.35;">
         No active gate.<br>
@@ -854,7 +857,7 @@
     </div>
 
     <!-- 4.1 2D Banana ROI (Peak & Bg) -->
-    <div class="control-group">
+    <div class="control-group two-d-only">
       <h3 style="color: #ffd600;">2D Banana ROI (Peak &amp; Bg)</h3>
       <div style="font-size:0.72rem; color:#aaa; line-height:1.3;">
         Draw closed polygon on 2D matrix for area integration and area-normalized background subtraction.
@@ -885,7 +888,7 @@
       <label style="margin-top: 6px;">Search Range</label>
       <select id="peakSearchRangeSelect">
         <option value="visible" selected>Visible Zoom Window</option>
-        <option value="full">Full Spectrum (0..4095)</option>
+        <option value="full">Full Spectrum</option>
       </select>
       <label style="margin-top: 6px;">Expected Peak FWHM (ch) <span class="range-val" id="peakSearchFwhmLabel">4.0</span></label>
       <input type="range" id="peakSearchFwhmSlider" min="1.5" max="15.0" step="0.5" value="4.0">
@@ -903,7 +906,7 @@
     </div>
 
     <!-- 4.3 2D Coincidence Peak Search -->
-    <div class="control-group">
+    <div class="control-group two-d-only">
       <h3 style="color: #ff4081;">2D Coincidence Peak Search</h3>
       <div style="font-size: 0.72rem; color: #aaa; margin-bottom: 6px; line-height: 1.35;">
         Hover on 2D matrix &amp; press <span style="color: #ff4081; font-weight: bold;">[P]</span> to automatically detect coincidence peaks with Compton ridge &amp; scatter rejection.
@@ -947,7 +950,7 @@
   </aside>
 
   <div class="workspace">
-    <div class="panel-2d" id="panel2D" style="position: relative;">
+    <div class="panel-2d two-d-only" id="panel2D" style="position: relative;">
       <!-- Floating Banana ROI Badge -->
       <div class="banana-badge" id="bananaRoiBadge" style="position: absolute; top: 10px; left: 10px; z-index: 10; background: rgba(20,20,20,0.9); border: 1px solid #444;">
         <span id="bananaRoiText">Banana ROI Active</span>
@@ -966,7 +969,7 @@
         </div>
       </div>
     </div>
-    <div class="panel-resizer" id="panelResizer" title="Drag to adjust 2D vs 1D panel width (Double-click to reset)"></div>
+    <div class="panel-resizer two-d-only" id="panelResizer" title="Drag to adjust 2D vs 1D panel width (Double-click to reset)"></div>
     <div class="panel-1d-container">
       <div class="panel-1d" id="panel1DX">
         <div class="panel-1d-header">
@@ -987,7 +990,7 @@
         </div>
         <canvas id="canvas1dX"></canvas>
       </div>
-      <div class="panel-1d" id="panel1DY">
+      <div class="panel-1d two-d-only" id="panel1DY">
         <div class="panel-1d-header">
           <div class="panel-1d-title-group">
             <span class="panel-1d-title" id="specTitleY" style="color: #ff9800;">Det 2 (Y Projection, Sliced X)</span>
@@ -1148,7 +1151,7 @@
     <tr><td>M / m</td><td>Toggle left menu panel (collapse / expand)</td></tr>
     <tr><td>Drag Divider</td><td>Adjust width of 2D matrix vs 1D projections (double-click to reset)</td></tr>
     <tr><td>[ / ] (Brackets)</td><td>Switch between loaded matrices (prev / next) preserving analysis state</td></tr>
-    <tr><td>Ctrl + O</td><td>Browse server filesystem to select and open .cmat matrix</td></tr>
+    <tr><td>Ctrl + O</td><td>Browse server filesystem to open .cmat or ROOT TH1/TH2</td></tr>
     <tr><td>Q / q</td><td>Quit viewer (close browser tab and stop terminal server)</td></tr>
     <tr><td>Esc / ?</td><td>Close Help / Cancel pending gate / Cancel pending BG region</td></tr>
   </table>
@@ -1185,7 +1188,7 @@
     <input type="text" id="browserFilterInput" class="browser-filter-input" placeholder="🔍 Filter matrices by name (e.g. GeE, run, cmat)...">
     <label style="display: flex; align-items: center; gap: 5px; font-size: 0.76rem; color: #cbd5e1; cursor: pointer; user-select: none; white-space: nowrap;">
       <input type="checkbox" id="chkBrowserCmatOnly" checked style="accent-color: #00e5ff; cursor: pointer;">
-      <span>.cmat only</span>
+      <span>Matrix files only</span>
     </label>
   </div>
 
@@ -1595,6 +1598,18 @@
 
   function updateMatrixUI() {
     if (!metadata) return;
+    const changedDimension = document.body.classList.contains('one-dimensional') !== Boolean(metadata.is_1d);
+    document.body.classList.toggle('one-dimensional', Boolean(metadata.is_1d));
+    if (changedDimension) {
+      gate1DState = { axis: null, w_gates: [], b_gates: [], pending_w: null, pending_b: null, last_res: null };
+      updateGateUI();
+      clearAllFits();
+      bananaMode = null;
+      bananaPolygonPeak = [];
+      bananaPolygonBg = [];
+      isMouseOver2D = false;
+      currentHoveredPanel = '1d-0';
+    }
     const mats = metadata.matrices || [
       { index: 0, name: metadata.filename, shape: metadata.shape, total_counts: metadata.total_counts, is_symmetric: metadata.is_symmetric }
     ];
@@ -1607,7 +1622,7 @@
       mats.forEach((m, i) => {
         const opt = document.createElement('option');
         opt.value = i;
-        opt.text = `[${i + 1}/${mats.length}] ${m.name} (${m.shape[0]}×${m.shape[1]})`;
+        opt.text = `[${i + 1}/${mats.length}] ${m.name} (${m.is_1d ? m.shape[0] + ' bins' : m.shape[0] + '×' + m.shape[1]})`;
         if (i === activeIdx) opt.selected = true;
         sel.appendChild(opt);
       });
@@ -1624,13 +1639,18 @@
     const sideName = document.getElementById('sideMatName');
     if (sideName) sideName.innerText = cur.name;
     const sideShape = document.getElementById('sideMatShape');
-    if (sideShape) sideShape.innerText = `${cur.shape[0]}×${cur.shape[1]}`;
+    if (sideShape) sideShape.innerText = cur.is_1d ? `${cur.shape[0]} bins` : `${cur.shape[0]}×${cur.shape[1]}`;
     const sideCounts = document.getElementById('sideMatCounts');
     if (sideCounts) sideCounts.innerText = cur.total_counts ? cur.total_counts.toLocaleString() : '-';
     const sideMax = document.getElementById('sideMatMax');
     if (sideMax) sideMax.innerText = cur.max_count !== undefined ? cur.max_count.toLocaleString() : (metadata.max_count ? metadata.max_count.toLocaleString() : '-');
     const sideSymm = document.getElementById('sideMatSymm');
-    if (sideSymm) sideSymm.innerText = cur.is_symmetric ? 'Symmetric' : 'Asymmetric';
+    if (sideSymm) sideSymm.innerText = cur.is_1d ? '1D Spectrum' : (cur.is_symmetric ? 'Symmetric' : 'Asymmetric');
+    document.getElementById('btnSidebarFindPeaksDet2').style.display = cur.is_1d ? 'none' : '';
+    document.getElementById('btnSidebarFitAllPeaksDet2').style.display = cur.is_1d ? 'none' : '';
+    const rangeOptions = document.getElementById('projRangeSelect').options;
+    rangeOptions[0].text = cur.is_1d ? 'Visible Zoom Window' : 'Synced with 2D Window Zoom';
+    rangeOptions[1].text = cur.is_1d ? 'Full Spectrum' : 'Full Matrix Range';
     const countBadge = document.getElementById('matrixCountBadge');
     if (countBadge) countBadge.innerText = `${activeIdx + 1} / ${mats.length}`;
 
@@ -1638,6 +1658,7 @@
     const sideNext = document.getElementById('btnSidebarNextMat');
     if (sidePrev) sidePrev.disabled = (mats.length <= 1);
     if (sideNext) sideNext.disabled = (mats.length <= 1);
+    resizeCanvases();
   }
 
   async function reapplyGates() {
@@ -1754,6 +1775,7 @@
         return;
       }
 
+      const changedDimension = Boolean(metadata && metadata.is_1d) !== Boolean(data.is_1d);
       metadata = data;
       updateMatrixUI();
 
@@ -1773,7 +1795,7 @@
       }
 
       // Re-apply all persistent 1D and 2D fits under new matrix conditions
-      await reapplyAllPersistentFits();
+      if (!changedDimension) await reapplyAllPersistentFits();
 
       render2D();
       renderBoth1DSpectra();
@@ -1933,7 +1955,7 @@
     let cmatCount = 0;
     filtered.forEach(e => { if (e.is_cmat) cmatCount++; });
     if (countBadge) {
-      countBadge.innerText = `${cmatCount} .cmat (${filtered.length} total)`;
+      countBadge.innerText = `${cmatCount} matrices (${filtered.length} total)`;
     }
 
     if (!browserState.isRoot && browserState.parentPath) {
@@ -1953,7 +1975,7 @@
 
     if (filtered.length === 0) {
       const trEmpty = document.createElement('tr');
-      trEmpty.innerHTML = `<td colspan="3" style="text-align: center; color: #64748b; padding: 28px;">No ${browserState.cmatOnly ? '.cmat matrix' : ''} files found in this directory</td>`;
+      trEmpty.innerHTML = `<td colspan="3" style="text-align: center; color: #64748b; padding: 28px;">No ${browserState.cmatOnly ? 'matrix' : ''} files found in this directory</td>`;
       tbody.appendChild(trEmpty);
       return;
     }
@@ -1965,7 +1987,7 @@
 
       let icon = entry.is_dir ? '📁' : (entry.is_cmat ? '⚛️' : '📄');
       let nameStyle = entry.is_dir ? 'font-weight: 600; color: #f8fafc;' : (entry.is_cmat ? 'font-weight: 600; color: #00e5ff;' : 'color: #94a3b8;');
-      let badge = entry.is_cmat ? '<span class="badge" style="background: rgba(0, 229, 255, 0.18); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 0.65rem; padding: 1px 5px; margin-left: 6px;">CMAT</span>' : '';
+      let badge = entry.is_cmat ? `<span class="badge" style="background: rgba(0, 229, 255, 0.18); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 0.65rem; padding: 1px 5px; margin-left: 6px;">${entry.is_root_matrix ? 'ROOT' : 'CMAT'}</span>` : '';
 
       tr.innerHTML = `
         <td class="cell-name">
@@ -2025,7 +2047,7 @@
         btnSubmit.innerText = 'Open Matrix';
       }
     } else {
-      if (lbl) lbl.innerText = `${ent.name} (Not a .cmat matrix)`;
+      if (lbl) lbl.innerText = `${ent.name} (Not a .cmat or .root matrix)`;
       if (btnSubmit) {
         btnSubmit.disabled = true;
         btnSubmit.innerText = 'Open Matrix';
@@ -2034,11 +2056,30 @@
   }
 
   async function submitOpenMatrix(pathStr) {
-    const target = pathStr || (browserState.selectedEntry ? browserState.selectedEntry.path : null);
+    let target = pathStr || (browserState.selectedEntry ? browserState.selectedEntry.path : null);
     if (!target) return;
     if (browserState.selectedEntry && browserState.selectedEntry.is_dir) {
       await fetchBrowsePath(target);
       return;
+    }
+    if (target.toLowerCase().endsWith('.root')) {
+      try {
+        const res = await fetch('/api/root_histograms?path=' + encodeURIComponent(target));
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        if (!data.histograms.length) throw new Error('No TH1 or TH2 histograms in this ROOT file');
+        let hist = data.histograms[0];
+        if (data.histograms.length > 1) {
+          const answer = window.prompt('Select a TH1 or TH2 histogram by name:\n' + data.histograms.join('\n'), hist);
+          if (answer === null) return;
+          hist = answer.trim();
+          if (!data.histograms.includes(hist)) throw new Error('Select a name from the list');
+        }
+        target += '::' + hist;
+      } catch (error) {
+        showMatrixToast(`ROOT load error: ${error.message}`, true);
+        return;
+      }
     }
     closeServerBrowser();
     await loadServerMatrixPath(target);
@@ -2231,6 +2272,7 @@
   }
 
   async function fetchTileAndRender() {
+    if (metadata && metadata.is_1d) return;
     const dpr = window.devicePixelRatio || 1;
     const pr = getPlotRect2D();
     const reqW = Math.min(2048, Math.max(128, Math.round(pr.w * dpr)));
@@ -2560,6 +2602,15 @@
     const res = await fetch(url);
     const data = await res.json();
 
+    if (metadata.is_1d) {
+      document.getElementById('specTitleX').innerText = `Spectrum: ${metadata.root_histogram || metadata.filename}`;
+      currentProjSpecX = data.specX;
+      currentProjSpecY = [];
+      renderBoth1DSpectra();
+      await updateActive1DFits();
+      return;
+    }
+
     if (gate1DState.axis === null || gate1DState.w_gates.length === 0) {
       currentProjSpecX = data.specX;
       currentProjSpecY = data.specY;
@@ -2645,6 +2696,8 @@
     ctx2d.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
 
+    const isCalX = isAxisCalibrated(0);
+    const isCalY = isAxisCalibrated(1);
     const numTicks = 6;
     for (let i = 0; i <= numTicks; i++) {
       const frac = i / numTicks;
@@ -2654,17 +2707,15 @@
       const py = Math.round(pr.y + pr.h - frac * pr.h);
       ctx2d.beginPath();
       ctx2d.moveTo(px, pr.y + pr.h); ctx2d.lineTo(px, pr.y + pr.h + 6); ctx2d.stroke();
-      ctx2d.fillText(chX.toString(), px, pr.y + pr.h + 22);
+      ctx2d.fillText(isCalX ? chToEnergy(chX, 0).toFixed(0) : chX.toString(), px, pr.y + pr.h + 22);
       ctx2d.beginPath();
       ctx2d.moveTo(pr.x, py); ctx2d.lineTo(pr.x - 6, py); ctx2d.stroke();
       ctx2d.textAlign = 'right';
-      ctx2d.fillText(chY.toString(), pr.x - 10, py + 6);
+      ctx2d.fillText(isCalY ? chToEnergy(chY, 1).toFixed(0) : chY.toString(), pr.x - 10, py + 6);
       ctx2d.textAlign = 'center';
     }
 
     // 2D Axis Titles
-    const isCalX = isAxisCalibrated(0);
-    const isCalY = isAxisCalibrated(1);
     ctx2d.fillStyle = '#00e5ff';
     ctx2d.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
@@ -5227,14 +5278,14 @@
       ctx.stroke();
       if (isCal) {
         const eStr = chToEnergy(c + 0.5, axis).toFixed(0);
-        ctx.fillText(`${eStr}k (${c})`, x, pr.y + pr.h + 20);
+        ctx.fillText(eStr, x, pr.y + pr.h + 20);
       } else {
         ctx.fillText(c.toString(), x, pr.y + pr.h + 20);
       }
     }
     const xLabel = (axis === 0)
-      ? (isCal ? 'Det 1 Energy (keV) / Channel' : 'Det 1 Channel')
-      : (isCal ? 'Det 2 Energy (keV) / Channel' : 'Det 2 Channel');
+      ? (isCal ? 'Det 1 Energy (keV)' : 'Det 1 Channel')
+      : (isCal ? 'Det 2 Energy (keV)' : 'Det 2 Channel');
     ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = (axis === 0) ? '#00e5ff' : '#ff9800';
     ctx.fillText(xLabel, pr.x + pr.w / 2, pr.y + pr.h + 42);
@@ -5267,7 +5318,7 @@
 
   function renderBoth1DSpectra() {
     render1DSpectrum(canvas1dX, ctx1dX, currentProjSpecX, 0, cursor1DChannelX);
-    render1DSpectrum(canvas1dY, ctx1dY, currentProjSpecY, 1, cursor1DChannelY);
+    if (!metadata || !metadata.is_1d) render1DSpectrum(canvas1dY, ctx1dY, currentProjSpecY, 1, cursor1DChannelY);
   }
 
   function updateScaleBadge2D() {
@@ -5316,10 +5367,10 @@
     const dVal = markers.down !== null ? markers.down : Math.round(view.y0);
     const uVal = markers.up !== null ? markers.up : Math.round(view.y1);
 
-    const lStr = isCalX ? `${lVal} (${chToEnergy(lVal, 0).toFixed(0)}k)` : `${lVal}`;
-    const rStr = isCalX ? `${rVal} (${chToEnergy(rVal, 0).toFixed(0)}k)` : `${rVal}`;
-    const dStr = isCalY ? `${dVal} (${chToEnergy(dVal, 1).toFixed(0)}k)` : `${dVal}`;
-    const uStr = isCalY ? `${uVal} (${chToEnergy(uVal, 1).toFixed(0)}k)` : `${uVal}`;
+    const lStr = isCalX ? `${lVal} (${chToEnergy(lVal, 0).toFixed(0)} keV)` : `${lVal}`;
+    const rStr = isCalX ? `${rVal} (${chToEnergy(rVal, 0).toFixed(0)} keV)` : `${rVal}`;
+    const dStr = isCalY ? `${dVal} (${chToEnergy(dVal, 1).toFixed(0)} keV)` : `${dVal}`;
+    const uStr = isCalY ? `${uVal} (${chToEnergy(uVal, 1).toFixed(0)} keV)` : `${uVal}`;
 
     const statusEl = document.getElementById('overlayStatus');
     if (statusEl) {
@@ -6378,7 +6429,7 @@
         unfocusControls();
       }
 
-      const targetPanel = getFocusedPanel();
+      const targetPanel = (metadata && metadata.is_1d) ? '1d-0' : getFocusedPanel();
 
       if (targetPanel === '1d-0' || targetPanel === '1d-1') {
         // 1D Spectrum Panning (Left/Right shifts channel window, Up/Down adjusts vertical counts scale)
@@ -6418,8 +6469,8 @@
       else if (e.key === 'm' || e.key === 'M') toggleSidebar();
       else if (e.key === 'q' || e.key === 'Q') quitViewer();
       else if (e.key === '=' || e.key === '+') clearAllFits();
-      else if (e.key === 'w' || e.key === 'W') handleGateKeyPress('w');
-      else if (e.key === 'x' || e.key === 'X') handleGateKeyPress('x');
+      else if (e.key === 'w' || e.key === 'W') { if (!metadata?.is_1d) handleGateKeyPress('w'); }
+      else if (e.key === 'x' || e.key === 'X') { if (!metadata?.is_1d) handleGateKeyPress('x'); }
       else if (e.key === 'b' || e.key === 'B') {
         if (e.shiftKey || targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {
           toggleBananaMode('bg');
@@ -6445,9 +6496,9 @@
         }
       }
       else if (e.key === 'g' || e.key === 'G') {
-        if (e.shiftKey) {
+        if (e.shiftKey && !metadata?.is_1d) {
           toggleBananaMode('peak');
-        } else {
+        } else if (!e.shiftKey) {
           let activeAxis = null;
           let activeCh = null;
           if (hovered1DAxis === 0 && cursor1DChannelX !== null) {
@@ -6481,7 +6532,7 @@
         }
       }
       else if (e.key === 'v' || e.key === 'V') {
-        if (isMouseOver2D) requestPeakFit2D(cursorChannel.x, cursorChannel.y);
+        if (isMouseOver2D && !metadata?.is_1d) requestPeakFit2D(cursorChannel.x, cursorChannel.y);
         else if (cursor1DChannelX !== null) requestPeakFit(0, cursor1DChannelX);
         else if (cursor1DChannelY !== null) requestPeakFit(1, cursor1DChannelY);
         else if (targetPanel === '1d-0') requestPeakFit(0, Math.round(view.x0 + (view.x1 - view.x0) / 2));

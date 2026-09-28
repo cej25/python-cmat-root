@@ -59,6 +59,12 @@ def main():
     script_2d = script_dir / "cmat_webviewer.py"
     script_3d = script_dir / "cmat3d_webviewer.py"
 
+    # ROOT TH1/TH2 input is handled by the 1D/2D viewer. A histogram can be selected
+    # with file.root::directory/histogram.
+    if any(".root" in arg.lower() for arg in sys.argv[1:] if not arg.startswith("-")):
+        args = [sys.executable, str(script_2d)] + sys.argv[1:]
+        os.execv(sys.executable, args)
+
     # Search sys.argv for .cmat files
     target_ndim = None
     first_cmat_file = None
