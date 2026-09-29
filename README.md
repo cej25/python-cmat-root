@@ -101,19 +101,24 @@ The `pycmat` script automatically inspects the input `.cmat` headers and routes 
 # Open multiple 2D matrices for differential analysis
 ./pycmat run01.cmat run02.cmat run03.cmat
 
-# Open a ROOT TH2 histogram (including one in a ROOT subdirectory)
+# Open a ROOT file and choose a TH1/TH2 histogram in the browser
+./pycmat run.root
+
+# Or open a particular ROOT TH2 directly (including one in a subdirectory)
 ./pycmat 'run.root::Coincidences/h2_Ge_gg'
 
 # Open a standalone ROOT TH1 spectrum with the same 1D search, fit and export tools
 ./pycmat 'run.root::Spectra/h1_Ge_E'
 ```
 
-ROOT files containing exactly one TH1 or TH2 can be opened as `./pycmat run.root`.
-For files with several histograms, choose one with `file.root::directory/histogram`.
-The 2D viewer's server file browser also lists ROOT files and prompts for a
-histogram if necessary. TH1 opens as a full-width 1D spectrum with peak search,
+Run `./pycmat run.root` to browse a ROOT file's TH1/TH2 objects by name and folder
+in a searchable picker. The direct `file.root::directory/histogram` syntax still
+opens a specific object immediately. In the server file browser, select a ROOT
+file or type its full path to open the same picker. With several ROOT files on
+the command line, the picker opens for each file. TH1 opens as a full-width 1D spectrum with peak search,
 single and multiplet fitting, background regions, integration, PDF/data export,
-and the half-life tool. TH2 opens with the 2D matrix and two projections.
+and the half-life tool. TH2 opens with the 2D matrix and two projections. Use
+**Browse ROOT Histograms** in the sidebar to switch objects within the open file.
 ROOT bin contents and uniform axis spacing are preserved as calibrated energies.
 Underflow and overflow bins are excluded. ROOT TTrees, TH2Poly and TH3 objects
 are not supported by this viewer.
@@ -189,6 +194,8 @@ python3 halflife.py spectrum.dat --scan-bg 0.0 40.0 50
 ```
 
 In the Half-Life popup, choose **Exponential decay** under **Fit model**. The centroid marks the decay onset; it starts at the fit range minimum and is fixed, but can be adjusted or freed. FWHM is unused for this model. The headless `halflife` command also accepts `--model exponential`.
+
+When a histogram has a calibrated X axis (including a ROOT time axis), the popup fits those physical X coordinates by default. The **X-Axis Coordinate** selector can switch back to channels. The displayed half-life, FWHM, fit range, saved `.fit` data, and exported PDF use the selected coordinate; ROOT time units are read from the histogram axis title when present. If the ROOT axis has no unit, enter one in the popup's X unit field; this labels the existing values without rescaling them. For a headless fit from a ROOT histogram, the `halflife` command likewise uses ROOT axis coordinates by default; `--channel` explicitly selects channels.
 
 ### 6. Python Library API (`cmat.py` & `cmat3d.py`)
 

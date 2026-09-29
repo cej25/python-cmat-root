@@ -761,6 +761,7 @@
         <button id="btnSidebarNextMat" class="secondary" title="Next Matrix [ ] ]" style="padding: 4px 6px; font-size: 0.75rem;">Next ] ▶</button>
       </div>
       <button id="btnOpenServerBrowser" class="primary" style="margin-bottom: 4px; background: linear-gradient(135deg, #00897b, #004d40); border: 1px solid #00bfa5; font-size: 0.78rem; padding: 6px 10px; font-weight: 600; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Browse Server Filesystem to Open Matrix [Ctrl+O]">📂 Browse Server Matrices...</button>
+      <button id="btnRootHistograms" class="secondary" style="display:none; margin-bottom: 4px; width:100%; font-size:0.78rem;" title="Choose another TH1 or TH2 from this ROOT file">📊 Browse ROOT Histograms...</button>
       <small style="color: #888; font-size: 0.65rem; display: block; margin-top: 5px; line-height: 1.2;">
         💡 Zoom, coincidence gates, and peak fits are locked and automatically re-evaluated across matrices for 1:1 differential analysis.
       </small>
@@ -1179,7 +1180,7 @@
 
   <div id="browserPathInputWrap" style="display: none; margin-bottom: 8px;">
     <div style="display: flex; gap: 6px;">
-      <input type="text" id="browserPathInput" placeholder="/path/to/directory" style="flex: 1; background: #0b0f17; border: 1px solid #00e5ff; color: #fff; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 0.8rem;">
+      <input type="text" id="browserPathInput" placeholder="/path/to/directory or file.root" style="flex: 1; background: #0b0f17; border: 1px solid #00e5ff; color: #fff; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 0.8rem;">
       <button id="btnBrowserPathGo" class="browser-btn" style="background: #0284c7; color: #fff; border-color: #38bdf8;">Go</button>
     </div>
   </div>
@@ -1218,6 +1219,18 @@
   </div>
 </div>
 <div id="matrixToast" class="matrix-toast" style="display: none;"></div>
+
+<div class="browser-modal-backdrop" id="rootPickerBackdrop"></div>
+<div class="browser-modal" id="rootPickerModal" role="dialog" aria-modal="true" aria-labelledby="rootPickerTitle">
+  <div class="browser-header">
+    <h2 id="rootPickerTitle">Choose ROOT histogram</h2>
+    <button id="rootPickerClose" class="fit-btn-close" title="Close histogram picker">✕</button>
+  </div>
+  <div id="rootPickerPath" style="color:#94a3b8; font-size:0.75rem; overflow-wrap:anywhere; margin-bottom:8px;"></div>
+  <input id="rootPickerFilter" type="search" class="browser-filter-input" placeholder="Filter TH1 / TH2 by name or folder..." aria-label="Filter ROOT histograms" style="margin-bottom:8px;">
+  <div id="rootPickerCount" style="font-size:0.72rem; color:#94a3b8; margin-bottom:6px;"></div>
+  <div id="rootPickerList" class="browser-table-wrap" role="listbox" aria-label="ROOT histograms"></div>
+</div>
 
 <script>
   let metadata = null;
@@ -1598,6 +1611,8 @@
 
   function updateMatrixUI() {
     if (!metadata) return;
+    const rootButton = document.getElementById('btnRootHistograms');
+    if (rootButton) rootButton.style.display = metadata.root_histogram ? 'block' : 'none';
     const changedDimension = document.body.classList.contains('one-dimensional') !== Boolean(metadata.is_1d);
     document.body.classList.toggle('one-dimensional', Boolean(metadata.is_1d));
     if (changedDimension) {
@@ -2058,31 +2073,97 @@
   async function submitOpenMatrix(pathStr) {
     let target = pathStr || (browserState.selectedEntry ? browserState.selectedEntry.path : null);
     if (!target) return;
-    if (browserState.selectedEntry && browserState.selectedEntry.is_dir) {
+    if (!pathStr && browserState.selectedEntry && browserState.selectedEntry.is_dir) {
       await fetchBrowsePath(target);
       return;
     }
     if (target.toLowerCase().endsWith('.root')) {
-      try {
-        const res = await fetch('/api/root_histograms?path=' + encodeURIComponent(target));
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        if (!data.histograms.length) throw new Error('No TH1 or TH2 histograms in this ROOT file');
-        let hist = data.histograms[0];
-        if (data.histograms.length > 1) {
-          const answer = window.prompt('Select a TH1 or TH2 histogram by name:\n' + data.histograms.join('\n'), hist);
-          if (answer === null) return;
-          hist = answer.trim();
-          if (!data.histograms.includes(hist)) throw new Error('Select a name from the list');
-        }
-        target += '::' + hist;
-      } catch (error) {
-        showMatrixToast(`ROOT load error: ${error.message}`, true);
-        return;
-      }
+      closeServerBrowser();
+      await openRootHistogramPicker(target);
+      return;
     }
     closeServerBrowser();
     await loadServerMatrixPath(target);
+  }
+
+  let rootPickerPath = '';
+  let rootPickerEntries = [];
+
+  function closeRootHistogramPicker() {
+    document.getElementById('rootPickerModal').style.display = 'none';
+    document.getElementById('rootPickerBackdrop').style.display = 'none';
+  }
+
+  function goToBrowserPath(path) {
+    if (/\.root(?:::.*)?$/i.test(path)) submitOpenMatrix(path);
+    else fetchBrowsePath(path);
+  }
+
+  function renderRootHistogramPicker() {
+    const filter = document.getElementById('rootPickerFilter').value.trim().toLowerCase();
+    const matches = rootPickerEntries.filter(entry => entry.name.toLowerCase().includes(filter)
+      || entry.type.toLowerCase().includes(filter));
+    const list = document.getElementById('rootPickerList');
+    const count = document.getElementById('rootPickerCount');
+    count.textContent = `${matches.length} of ${rootPickerEntries.length} TH1 / TH2 histograms`;
+    list.replaceChildren();
+    if (!matches.length) {
+      const empty = document.createElement('p');
+      empty.style.padding = '12px';
+      empty.textContent = 'No matching histograms';
+      list.appendChild(empty);
+      return;
+    }
+    for (const entry of matches) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.style.cssText = 'display:flex;justify-content:space-between;gap:14px;width:100%;text-align:left;padding:9px 12px;border:0;border-bottom:1px solid #293445;background:transparent;color:#e2e8f0;cursor:pointer;overflow-wrap:anywhere;';
+      if (metadata?.root_histogram === entry.name && metadata.filepath?.split('::')[0] === rootPickerPath) {
+        button.style.background = '#164e63';
+        button.title = 'Currently displayed histogram';
+      }
+      const name = document.createElement('span');
+      name.textContent = entry.name;
+      const type = document.createElement('span');
+      type.textContent = entry.type;
+      type.style.cssText = 'flex:none;color:#00e5ff;font-size:0.72rem;';
+      button.append(name, type);
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const loaded = await loadServerMatrixPath(`${rootPickerPath}::${entry.name}`);
+        button.disabled = false;
+        if (loaded) {
+          closeRootHistogramPicker();
+          const next = metadata.pending_root_files?.[0];
+          if (next) await openRootHistogramPicker(next);
+        }
+      });
+      list.appendChild(button);
+    }
+  }
+
+  async function openRootHistogramPicker(path) {
+    rootPickerPath = path;
+    const modal = document.getElementById('rootPickerModal');
+    document.getElementById('rootPickerBackdrop').style.display = 'block';
+    modal.style.display = 'flex';
+    document.getElementById('rootPickerPath').textContent = path;
+    const filter = document.getElementById('rootPickerFilter');
+    filter.value = '';
+    document.getElementById('rootPickerCount').textContent = 'Reading ROOT file...';
+    document.getElementById('rootPickerList').replaceChildren();
+    try {
+      const response = await fetch('/api/root_histograms?path=' + encodeURIComponent(path));
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || 'Could not read ROOT histograms');
+      rootPickerEntries = data.details || data.histograms.map(name => ({ name, type: 'TH1/TH2' }));
+      if (!rootPickerEntries.length) throw new Error('No TH1 or TH2 histograms in this ROOT file');
+      renderRootHistogramPicker();
+      filter.focus();
+    } catch (error) {
+      document.getElementById('rootPickerCount').textContent = error.message;
+      showMatrixToast(`ROOT load error: ${error.message}`, true);
+    }
   }
 
   function handleBrowserKeyDown(e) {
@@ -2126,8 +2207,10 @@
   }
 
   async function loadServerMatrixPath(pathStr) {
-    if (!pathStr || !pathStr.trim()) return;
+    if (!pathStr || !pathStr.trim()) return false;
     showMatrixToast(`Loading ${pathStr}...`);
+    const hadMatrix = Boolean(metadata && metadata.shape && metadata.shape[0]);
+    const previousIs1D = Boolean(metadata?.is_1d);
     try {
       const res = await fetch('/api/load_matrix_path', {
         method: 'POST',
@@ -2137,16 +2220,25 @@
       const data = await res.json();
       if (data.error) {
         showMatrixToast(`Load error: ${data.error}`, true);
-        return;
+        return false;
       }
       metadata = data;
       updateMatrixUI();
 
       // Preserve Viewport, Colormap, Gates, Fits
-      view.x0 = Math.max(0, Math.min(metadata.shape[0] - 1, view.x0));
-      view.x1 = Math.max(view.x0 + 1, Math.min(metadata.shape[0], view.x1));
-      view.y0 = Math.max(0, Math.min(metadata.shape[1] - 1, view.y0));
-      view.y1 = Math.max(view.y0 + 1, Math.min(metadata.shape[1], view.y1));
+      if (!hadMatrix || previousIs1D !== Boolean(metadata.is_1d)) {
+        view = { x0: 0, x1: metadata.shape[0], y0: 0, y1: metadata.shape[1] };
+        maxCountGlobal = Math.max(100, metadata.max_count || 1000);
+        currentVmax = Math.min(800, maxCountGlobal);
+        const slider = document.getElementById('vmaxSlider');
+        if (slider) slider.value = valueToVmaxSlider(currentVmax);
+        document.getElementById('vmaxLabel').innerText = currentVmax;
+      } else {
+        view.x0 = Math.max(0, Math.min(metadata.shape[0] - 1, view.x0));
+        view.x1 = Math.max(view.x0 + 1, Math.min(metadata.shape[0], view.x1));
+        view.y0 = Math.max(0, Math.min(metadata.shape[1] - 1, view.y0));
+        view.y1 = Math.max(view.y0 + 1, Math.min(metadata.shape[1], view.y1));
+      }
 
       await fetchTileAndRender();
       await fetch1DProjection();
@@ -2159,9 +2251,11 @@
       renderBoth1DSpectra();
 
       showMatrixToast(`Successfully loaded ${metadata.filename} (Conditions preserved)`);
+      return true;
     } catch (err) {
       console.error("Server path load error:", err);
       showMatrixToast(`Failed to load: ${err.message}`, true);
+      return false;
     }
   }
 
@@ -2177,8 +2271,10 @@
 
     const res = await fetch('/api/metadata');
     metadata = await res.json();
-    updateMatrixUI();
-    view = { x0: 0, x1: metadata.shape[0], y0: 0, y1: metadata.shape[1] };
+    if (metadata.shape) updateMatrixUI();
+    view = metadata.shape
+      ? { x0: 0, x1: metadata.shape[0], y0: 0, y1: metadata.shape[1] }
+      : { x0: 0, x1: 1, y0: 0, y1: 1 };
 
     // Apply configuration defaults
     const cfg = metadata.config || {};
@@ -2267,8 +2363,13 @@
     setupEvents();
     fetchFitLogStatus();
     updateScaleBadge2D();
+    if (!metadata.shape) {
+      if (metadata.pending_root_files?.length) await openRootHistogramPicker(metadata.pending_root_files[0]);
+      return;
+    }
     await fetchTileAndRender();
     await fetch1DProjection();
+    if (metadata.pending_root_files?.length) await openRootHistogramPicker(metadata.pending_root_files[0]);
   }
 
   async function fetchTileAndRender() {
@@ -5922,9 +6023,12 @@
       gate1DState.axis === 1 - selectedAxis &&
       gate1DState.w_gates && gate1DState.w_gates.length > 0
     );
-    const xEnergy = isAxisCalibrated(selectedAxis)
-      ? x.map(ch => chToEnergy(ch, selectedAxis))
+    const cal = getCalForAxis(selectedAxis);
+    const xEnergy = (metadata.root_histogram || isAxisCalibrated(selectedAxis))
+      ? x.map(ch => (cal[0] || 0) + (cal[1] === undefined ? 1 : cal[1]) * (ch + (metadata.root_histogram ? 0.5 : 0)) + (cal[2] || 0) * (ch + (metadata.root_histogram ? 0.5 : 0)) ** 2)
       : null;
+    const physicalLabel = metadata.axis_labels?.[selectedAxis] || (metadata.root_histogram ? 'ROOT axis coordinate' : 'Energy (keV)');
+    const physicalUnit = metadata.axis_units?.[selectedAxis] || (metadata.root_histogram ? 'axis units' : 'keV');
 
     return {
       success: true,
@@ -5933,6 +6037,8 @@
       y,
       dy,
       x_energy: xEnergy,
+      x_axis_label: physicalLabel,
+      x_unit: physicalUnit,
       header_lines: [
         `# Current WebViewer 1D View - Det ${selectedAxis + 1}`,
         `# Visible channels: ${chStart}..${chEnd}${isSynced ? ' (synced to 2D view)' : ' (full projection)'}`,
@@ -6056,6 +6162,11 @@
 
     const btnHeaderOpen = document.getElementById('btnHeaderOpenBrowser');
     if (btnHeaderOpen) btnHeaderOpen.addEventListener('click', () => openServerBrowser());
+    const btnRootHistograms = document.getElementById('btnRootHistograms');
+    if (btnRootHistograms) btnRootHistograms.addEventListener('click', () => {
+      const rootPath = (metadata?.filepath || '').split('::')[0];
+      if (rootPath) openRootHistogramPicker(rootPath);
+    });
 
     const btnCloseBrowser = document.getElementById('btnBrowserClose');
     if (btnCloseBrowser) btnCloseBrowser.addEventListener('click', closeServerBrowser);
@@ -6105,7 +6216,7 @@
     if (btnPathGo && pathInp) {
       btnPathGo.addEventListener('click', () => {
         const v = pathInp.value.trim();
-        if (v) fetchBrowsePath(v);
+        if (v) goToBrowserPath(v);
       });
     }
     if (pathInp) {
@@ -6113,7 +6224,7 @@
         if (e.key === 'Enter') {
           e.preventDefault();
           const v = pathInp.value.trim();
-          if (v) fetchBrowsePath(v);
+          if (v) goToBrowserPath(v);
         } else if (e.key === 'Escape') {
           if (pathWrap) pathWrap.style.display = 'none';
         }
@@ -6156,6 +6267,17 @@
     if (btnSubmitBrowser) {
       btnSubmitBrowser.addEventListener('click', () => submitOpenMatrix());
     }
+    document.getElementById('rootPickerClose').addEventListener('click', closeRootHistogramPicker);
+    document.getElementById('rootPickerFilter').addEventListener('input', renderRootHistogramPicker);
+    document.getElementById('rootPickerFilter').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        document.querySelector('#rootPickerList button')?.click();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRootHistogramPicker();
+      }
+    });
 
     document.getElementById('cmapSelect').addEventListener('change', () => { updateColorLUT(); render2D(); });
     const vmaxSlider = document.getElementById('vmaxSlider');

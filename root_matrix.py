@@ -1,6 +1,7 @@
 """Read ROOT TH1/TH2 histograms into the viewer's matrix interface."""
 
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -29,10 +30,16 @@ def _open_root(path):
 
 def list_root_histograms(path):
     """List supported TH1/TH2 objects, including subdirectories."""
+    return [item["name"] for item in describe_root_histograms(path)]
+
+
+def describe_root_histograms(path):
+    """List names and classes without reading histogram bin arrays."""
     with _open_root(path) as root_file:
-        return sorted(k for k, cls in root_file.classnames(recursive=True, cycle=False).items()
-                      if (cls.startswith("TH1") or cls.startswith("TH2"))
-                      and not cls.startswith("TH2Poly"))
+        return [{"name": name, "type": cls} for name, cls in sorted(
+            root_file.classnames(recursive=True, cycle=False).items())
+            if (cls.startswith("TH1") or cls.startswith("TH2"))
+            and not cls.startswith("TH2Poly")]
 
 
 def _linear_calibration(edges, axis):
@@ -41,6 +48,19 @@ def _linear_calibration(edges, axis):
         raise ValueError(f"ROOT histogram {axis} axis must have uniform finite bin widths")
     # Viewer bin centers are evaluated at channel + 0.5.
     return [float(edges[0]), float(widths[0]), 0.0]
+
+
+def _axis_title(hist, axis):
+    """Preserve the physical coordinate label stored in a ROOT histogram."""
+    try:
+        return str(hist.member(f"f{axis}axis").member("fTitle")).strip()
+    except (AttributeError, KeyError):
+        return ""
+
+
+def _axis_unit(title):
+    match = re.search(r"(?:\[|\(|\b)(ps|ns|µs|μs|us|ms|s)(?:\]|\)|\b)", title, re.IGNORECASE)
+    return match.group(1) if match else "axis units"
 
 
 class ROOTMatrixReader:
@@ -66,17 +86,21 @@ class ROOTMatrixReader:
                 values, x_edges = hist.to_numpy(flow=False)
                 self.ndim = 1
                 self.cal = {0: _linear_calibration(x_edges, "X")}
+                self.axis_labels = {0: _axis_title(hist, "X") or "ROOT X coordinate"}
                 self._matrix = np.asarray(values)[np.newaxis, :]
             elif hist.classname.startswith("TH2") and not hist.classname.startswith("TH2Poly"):
                 values, x_edges, y_edges = hist.to_numpy(flow=False)
                 self.ndim = 2
                 self.cal = {0: _linear_calibration(x_edges, "X"),
                             1: _linear_calibration(y_edges, "Y")}
+                self.axis_labels = {0: _axis_title(hist, "X") or "ROOT X coordinate",
+                                    1: _axis_title(hist, "Y") or "ROOT Y coordinate"}
                 # Uproot indexes TH2 values [X, Y]; the viewer uses [Y, X].
                 self._matrix = np.asarray(values.T)
             else:
                 raise ValueError(f"{object_name!r} is {hist.classname}, expected TH1 or TH2")
         self.res2, self.res1 = self._matrix.shape
+        self.axis_units = {axis: _axis_unit(label) for axis, label in self.axis_labels.items()}
         self.is_symmetric = (self.ndim == 2 and self.res1 == self.res2 and
                              np.array_equal(self._matrix, self._matrix.T))
 
@@ -90,4 +114,5 @@ class ROOTMatrixReader:
         return {"filename": str(self.filename), "dimensions": self.ndim,
                 "shape": (self.res1, self.res2), "shape_yx": (self.res2, self.res1),
                 "matrix_mode": "Symmetric" if self.is_symmetric else "Normal",
-                "root_histogram": self.object_name}
+                "root_histogram": self.object_name,
+                "axis_labels": self.axis_labels, "axis_units": self.axis_units}

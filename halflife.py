@@ -392,14 +392,14 @@ def save_fit_file(
         f.write(f"# Initial scaling factor = {fit_result.get('init_scale', scale):.2f}\n")
         f.write(f"#++++++++++++Results of fit++++++++++++\n")
         
-        t12_status = f"+/- {t12_err:.3f}" if free_flags[0] else "FIXED"
-        f.write(f"# t_1/2 = {t12:.3f} {t12_status}\n")
+        t12_status = f"+/- {t12_err:.3g}" if free_flags[0] else "FIXED"
+        f.write(f"# t_1/2 = {t12:.6g} {t12_status} {fit_result.get('x_unit', spec.x_label)}\n")
         
-        fwhm_status = f"+/- {fwhm_err:.3f}" if free_flags[1] else "FIXED"
-        f.write(f"# FWHM = {fwhm:.3f} {fwhm_status}\n")
+        fwhm_status = f"+/- {fwhm_err:.3g}" if free_flags[1] else "FIXED"
+        f.write(f"# FWHM = {fwhm:.6g} {fwhm_status}\n")
         
-        cent_status = f"+/- {cent_err:.2f}" if free_flags[2] else "FIXED"
-        f.write(f"# Centroid = {cent:.2f} {cent_status}\n")
+        cent_status = f"+/- {cent_err:.3g}" if free_flags[2] else "FIXED"
+        f.write(f"# Centroid = {cent:.6g} {cent_status}\n")
         
         scale_status = f"+/- {scale_err:.2f}" if free_flags[3] else "FIXED"
         f.write(f"# Scaling factor = {scale:.2f} {scale_status}\n")
@@ -413,7 +413,7 @@ def save_fit_file(
         x_vals = fit_result.get("x_eval", spec.x)
         y_fit = fit_result.get("y_fit", eval_halflife(x_vals, t12, fwhm, cent, scale, bg))
         for x_v, y_v in zip(x_vals, y_fit):
-            f.write(f"{x_v:8.1f}\t{y_v:8.3f}\n")
+            f.write(f"{x_v:.12g}\t{y_v:.6g}\n")
 
 
 # ==============================================================================
@@ -497,9 +497,8 @@ class HalfLifeFitter:
         self.active_range = (float(np.min(self.spec.x)), float(np.max(self.spec.x)))
         
         # Adjust initial guesses accordingly
-        self.pars[0] /= factor
-        self.pars[1] /= factor
-        self.pars[2] /= factor
+        # x_new is the mean of the original physical X values, so lifetime,
+        # response width and centroid remain in the same coordinate units.
         self.pars[3] *= factor
         self.pars[4] *= factor
         return self.spec
@@ -742,6 +741,7 @@ class HalfLifeFitter:
 
         result_dict = {
             "model": self.model,
+            "x_unit": self.spec.x_label,
             "success": bool(res.success),
             "status_message": res.message,
             "nfev": int(res.nfev),
@@ -965,9 +965,9 @@ class HalfLifeFitter:
         # even if the legend grows or shrinks. Scale is deliberately omitted: it is
         # an overall normalisation, not a fitted decay parameter, and the figure
         # needs no amplitude calibration.
-        info_text = f"$t_{{1/2}} = {res['t12']:.3f} \\pm {res['t12_err']:.3f}$\n"
+        info_text = f"$t_{{1/2}} = {res['t12']:.6g} \\pm {res['t12_err']:.3g}$ {res.get('x_unit', self.spec.x_label)}\n"
         if res.get("model") != "exponential":
-            info_text += f"FWHM $= {res['fwhm']:.3f} \\pm {res['fwhm_err']:.3f}$\n"
+            info_text += f"FWHM $= {res['fwhm']:.6g} \\pm {res['fwhm_err']:.3g}$\n"
         info_text += (
             f"Centroid $= {res['centroid']:.2f} \\pm {res['centroid_err']:.2f}$\n"
             f"$\\chi^2/\\mathrm{{NDF}} = {res['chisq_ndf']:.3f}$"
