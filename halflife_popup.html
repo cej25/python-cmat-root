@@ -597,6 +597,15 @@
           <button class="btn btn-sm" onclick="autoEstimateGuesses()" title="Auto-detect prompt centroid, FWHM, and decay slope">⚡ Auto Guess</button>
         </div>
 
+        <div class="form-group">
+          <label class="form-label" for="fitModel">Fit model:</label>
+          <select id="fitModel" onchange="onFitModelChange()">
+            <option value="convolved">Gaussian + exponential convolution</option>
+            <option value="exponential">Exponential decay (no prompt Gaussian)</option>
+          </select>
+          <small style="color:var(--text-muted);">Exponential starts at the centroid; set it to the decay onset and fix it for a stable fit.</small>
+        </div>
+
         <table class="params-table">
           <thead>
             <tr>
@@ -1425,6 +1434,17 @@
         const input = document.getElementById(id);
         input.value = formatParameterValue(id, clampParameterValue(id, getParameterValue(id)));
       });
+      if (document.getElementById('fitModel').value === 'exponential') {
+        const fwhmInput = document.getElementById('p_fwhm');
+        fwhmInput.dataset.previousValue = fwhmInput.value;
+        fwhmInput.value = '0';
+        const onset = document.getElementById('p_centroid');
+        onset.dataset.previousValue = onset.value;
+        if (document.getElementById('fix_centroid').checked) {
+          onset.value = formatParameterValue('p_centroid', getFitRange().min);
+          parameterState.p_centroid.center = getFitRange().min;
+        }
+      }
       syncAllParameterControls();
 
       redrawPlot();
@@ -1663,8 +1683,17 @@
 
       for (let i = 0; i < xArr.length; i++) {
         const x1 = xArr[i] - cent;
+        if (Math.abs(fwhm) < 1e-9 && Math.abs(t12) < 1e-9) {
+          yOut[i] = bg;
+          continue;
+        }
         if (Math.abs(t12) < 1e-9) {
           yOut[i] = scale * Math.exp(-Math.pow(x1 / sigmaG, 2)) / (Math.sqrt(Math.PI) * sigmaG) + bg;
+          continue;
+        }
+        if (Math.abs(fwhm) < 1e-9) {
+          yOut[i] = bg + (tau < 0 ? x1 >= 0 : x1 <= 0)
+            * scale * Math.exp(x1 / tau) / absTau;
           continue;
         }
         let u = (x1 / sigmaG) + ep;
@@ -1709,6 +1738,38 @@
       return true;
     }
 
+    function onFitModelChange() {
+      const pure = document.getElementById('fitModel').value === 'exponential';
+      const input = document.getElementById('p_fwhm');
+      const fixed = document.getElementById('fix_fwhm');
+      if (pure) {
+        input.dataset.previousValue = input.value;
+        fixed.dataset.previousChecked = String(fixed.checked);
+        input.value = '0';
+        fixed.checked = true;
+        const onset = document.getElementById('p_centroid');
+        const fixOnset = document.getElementById('fix_centroid');
+        onset.dataset.previousValue = onset.value;
+        fixOnset.dataset.previousChecked = String(fixOnset.checked);
+        onset.value = formatParameterValue('p_centroid', getFitRange().min);
+        fixOnset.checked = true;
+        parameterState.p_centroid.center = getFitRange().min;
+      } else {
+        input.value = input.dataset.previousValue || input.value;
+        fixed.checked = fixed.dataset.previousChecked === 'true';
+        const onset = document.getElementById('p_centroid');
+        const fixOnset = document.getElementById('fix_centroid');
+        onset.value = onset.dataset.previousValue || onset.value;
+        fixOnset.checked = fixOnset.dataset.previousChecked === 'true';
+      }
+      input.disabled = pure;
+      fixed.disabled = pure;
+      syncParameterControl('p_fwhm');
+      syncParameterControl('p_centroid');
+      activeFitResult = null;
+      redrawPlot();
+    }
+
     // Execute Fit
     async function executeFit() {
       if (!currentData) {
@@ -1716,7 +1777,8 @@
         return;
       }
 
-      const zeroFwhmFit = prepareZeroFwhmFit();
+      const model = document.getElementById('fitModel').value;
+      const zeroFwhmFit = model === 'exponential' ? false : prepareZeroFwhmFit();
       const fitRange = getFitRange();
       if (zeroFwhmFit) redrawPlot();
 
@@ -1728,6 +1790,7 @@
         x: currentData.x,
         y: currentData.y,
         dy: currentData.dy,
+        model: model,
         t12: parseFloat(document.getElementById('p_t12').value),
         fwhm: parseFloat(document.getElementById('p_fwhm').value),
         centroid: parseFloat(document.getElementById('p_centroid').value),
@@ -1735,7 +1798,7 @@
         bg: parseFloat(document.getElementById('p_bg').value),
         freepars: [
           !document.getElementById('fix_t12').checked,
-          !document.getElementById('fix_fwhm').checked,
+          model !== 'exponential' && !document.getElementById('fix_fwhm').checked,
           zeroFwhmFit ? false : !document.getElementById('fix_centroid').checked,
           !document.getElementById('fix_scale').checked,
           !document.getElementById('fix_bg').checked
@@ -1803,8 +1866,8 @@
       document.getElementById('resT12').innerText = `${res.t12.toFixed(3)}`;
       document.getElementById('resT12Err').innerText = res.freepars[0] ? `± ${res.t12_err.toFixed(3)} ${unit}` : '(FIXED)';
 
-      document.getElementById('resFWHM').innerText = `${res.fwhm.toFixed(3)}`;
-      document.getElementById('resFWHMErr').innerText = res.freepars[1] ? `± ${res.fwhm_err.toFixed(3)} ${unit}` : '(FIXED)';
+      document.getElementById('resFWHM').innerText = res.model === 'exponential' ? '—' : `${res.fwhm.toFixed(3)}`;
+      document.getElementById('resFWHMErr').innerText = res.model === 'exponential' ? '(not used)' : res.freepars[1] ? `± ${res.fwhm_err.toFixed(3)} ${unit}` : '(FIXED)';
 
       document.getElementById('resCentroid').innerText = `${res.centroid.toFixed(2)}`;
       document.getElementById('resCentroidErr').innerText = res.freepars[2] ? `± ${res.centroid_err.toFixed(2)}` : '(FIXED)';
@@ -2029,7 +2092,7 @@
 
       // 4. Model Curve & Components
       const t12 = parseFloat(document.getElementById('p_t12').value);
-      const fwhm = parseFloat(document.getElementById('p_fwhm').value);
+      const fwhm = document.getElementById('fitModel').value === 'exponential' ? 0 : parseFloat(document.getElementById('p_fwhm').value);
       const cent = parseFloat(document.getElementById('p_centroid').value);
       const scale = parseFloat(document.getElementById('p_scale').value);
       const bg = parseFloat(document.getElementById('p_bg').value);
@@ -2059,7 +2122,7 @@
       // and is precisely the function that gets convolved with the exponential.
       // Its peak is intentionally taller/narrower than the convoluted fit, since
       // the exponential smears the same counts over a wider range.
-      const drawPrompt = showComps && Math.abs(t12) > 0.1;
+      const drawPrompt = showComps && Math.abs(t12) > 0.1 && document.getElementById('fitModel').value !== 'exponential';
       if (drawPrompt) {
         const promptY = evaluateModel(curveX, 0.0, fwhm, cent, scale, bg);
         ctx.strokeStyle = "#fbbf24";
@@ -2382,6 +2445,7 @@
 
       const payload = {
         x: currentData.x,
+        model: document.getElementById('fitModel').value,
         y: currentData.y,
         dy: currentData.dy,
         b_min: bMin,
@@ -2393,7 +2457,7 @@
         scale: parseFloat(document.getElementById('p_scale').value),
         freepars: [
           !document.getElementById('fix_t12').checked,
-          !document.getElementById('fix_fwhm').checked,
+          document.getElementById('fitModel').value !== 'exponential' && !document.getElementById('fix_fwhm').checked,
           !document.getElementById('fix_centroid').checked,
           !document.getElementById('fix_scale').checked,
           false // fixed bg during scan steps
@@ -2521,7 +2585,8 @@
       content += `# Output file: ${currentData.filename}.fit\n`;
       content += `#++++++++++++Results of fit++++++++++++\n`;
       content += `# t_1/2 = ${activeFitResult.t12.toFixed(3)} +/- ${activeFitResult.t12_err.toFixed(3)}\n`;
-      content += `# FWHM = ${activeFitResult.fwhm.toFixed(3)} +/- ${activeFitResult.fwhm_err.toFixed(3)}\n`;
+      content += `# Model: ${activeFitResult.model || 'convolved'}\n`;
+      if (activeFitResult.model !== 'exponential') content += `# FWHM = ${activeFitResult.fwhm.toFixed(3)} +/- ${activeFitResult.fwhm_err.toFixed(3)}\n`;
       content += `# Centroid = ${activeFitResult.centroid.toFixed(2)} +/- ${activeFitResult.centroid_err.toFixed(2)}\n`;
       content += `# Scaling factor = ${activeFitResult.scale.toFixed(2)} +/- ${activeFitResult.scale_err.toFixed(2)}\n`;
       content += `# Background level = ${activeFitResult.bg.toFixed(2)} (fixed)\n`;
@@ -2550,6 +2615,7 @@
       const isLog = document.getElementById('plotLogScale').checked ? 1 : 0;
       const params = new URLSearchParams({
         file: currentData.filename,
+        model: activeFitResult.model || 'convolved',
         t12: String(activeFitResult.t12),
         t12_err: String(activeFitResult.t12_err),
         fwhm: String(activeFitResult.fwhm),

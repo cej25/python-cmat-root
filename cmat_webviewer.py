@@ -4565,7 +4565,7 @@ class CMATCommandInterpreter:
         print("    export_amat <out.mat>               Export 2D matrix to ASCII matrix format")
         print()
         print("  Lifetime & Half-Life Fitting:")
-        print("    halflife <axis|file.dat> [--t12 V] [--fwhm V] [--centroid V] [--bg V] [--range min max] [--scan-bg] [--out f.fit] [--pdf f.pdf]")
+        print("    halflife <axis|file.dat> [--model convolved|exponential] [--t12 V] [--fwhm V] [--centroid V] [--bg V] [--range min max] [--scan-bg] [--out f.fit] [--pdf f.pdf]")
         print()
         print("  Scripting & Control:")
         print("    macro <filepath>                    Execute commands from macro script file")
@@ -5403,6 +5403,7 @@ class CMATCommandInterpreter:
                 print(f"[!] Warning: Compression failed: {e}", file=sys.stderr)
 
         t12 = float(flags["t12"]) if "t12" in flags else None
+        model = str(flags.get("model", "convolved"))
         fwhm = float(flags["fwhm"]) if "fwhm" in flags else None
         centroid = float(flags["centroid"]) if "centroid" in flags else None
         scale = float(flags["scale"]) if "scale" in flags else None
@@ -5425,6 +5426,9 @@ class CMATCommandInterpreter:
                 except ValueError:
                     pass
 
+        fitter.model = model
+        if fit_range is not None:
+            fitter.active_range = fit_range
         if "scan-bg" in flags or "scan_bg" in flags:
             print(f"[*] Exploring background chi^2 profile on '{source_name}'...")
             fitter.scan_background(apply_best=True)
@@ -5436,7 +5440,8 @@ class CMATCommandInterpreter:
             scale=scale,
             bg=bg,
             freepars=freepars,
-            fit_range=fit_range
+            fit_range=fit_range,
+            model=model
         )
 
         bar = "═" * 60
@@ -5450,7 +5455,9 @@ class CMATCommandInterpreter:
         bg_s = f"+/- {res['bg_err']:.2f}" if freepars[4] else "(FIXED / not fitted)"
 
         print(f"  Half-Life (t_1/2) : {res['t12']:9.3f} {t12_s} {fitter.spec.x_label}")
-        print(f"  Prompt FWHM       : {res['fwhm']:9.3f} {fwhm_s} {fitter.spec.x_label}")
+        print(f"  Model             : {res['model']}")
+        if res['model'] != 'exponential':
+            print(f"  Prompt FWHM       : {res['fwhm']:9.3f} {fwhm_s} {fitter.spec.x_label}")
         print(f"  Centroid          : {res['centroid']:9.2f} {cent_s}")
         print(f"  Scaling Factor    : {res['scale']:9.2f} {scale_s}")
         print(f"  Background Level  : {res['bg']:9.2f} {bg_s}")
@@ -6819,7 +6826,12 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             fn = query.get("file", ["spectrum.dat"])[0].strip()
             t12 = max(0.0, float(query.get("t12", [20.0])[0]))
+            model = query.get("model", ["convolved"])[0]
+            if model not in ("convolved", "exponential"):
+                model = "convolved"
             fwhm = float(query.get("fwhm", [15.0])[0])
+            if model == "exponential":
+                fwhm = 0.0
             centroid = float(query.get("centroid", [0.0])[0])
             scale = float(query.get("scale", [1000.0])[0])
             bg = float(query.get("bg", [0.0])[0])
@@ -6827,6 +6839,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             r1 = float(query.get("r1", [0.0])[0])
             t12_err = float(query.get("t12_err", [0.0])[0])
             fwhm_err = float(query.get("fwhm_err", [0.0])[0])
+            if model == "exponential":
+                fwhm_err = 0.0
             centroid_err = float(query.get("centroid_err", [0.0])[0])
             scale_err = float(query.get("scale_err", [0.0])[0])
             bg_err = float(query.get("bg_err", [0.0])[0])
@@ -6892,6 +6906,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 chisq_total = float(np.sum(residuals_full[fit_mask] ** 2))
                 result = {
                     "success": True,
+                    "model": model,
                     "t12": t12,
                     "t12_err": t12_err,
                     "fwhm": fwhm,
@@ -7080,7 +7095,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     scale=data.get("scale"),
                     bg=data.get("bg"),
                     freepars=freepars,
-                    fit_range=fit_range
+                    fit_range=fit_range,
+                    model=data.get("model", "convolved")
                 )
 
                 self.send_response(200)
@@ -7115,6 +7131,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     float(data.get("bg", 0.0))
                 ]
                 fitter.freepars = data.get("freepars", [True, True, True, True, True])
+                fitter.model = data.get("model", "convolved")
 
                 b_min = float(data["b_min"]) if "b_min" in data else None
                 b_max = float(data["b_max"]) if "b_max" in data else None

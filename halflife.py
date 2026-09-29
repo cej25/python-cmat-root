@@ -385,6 +385,7 @@ def save_fit_file(
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"# Input file: {inname}\n")
         f.write(f"# Output file: {filepath.name}\n")
+        f.write(f"# Model: {fit_result.get('model', 'convolved')}\n")
         f.write(f"# Initial guess t_1/2 = {fit_result.get('init_t12', t12):.2f}\n")
         f.write(f"# Initial guess FWHM = {fit_result.get('init_fwhm', fwhm):.2f}\n")
         f.write(f"# Initial guess centroid = {fit_result.get('init_centroid', cent):.2f}\n")
@@ -431,6 +432,7 @@ class HalfLifeFitter:
         self.pars: List[float] = [20.0, 15.0, 0.0, 1000.0, 0.0]
         self.errs: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
         self.freepars: List[bool] = [True, True, True, True, True]  # background is free by default
+        self.model = "convolved"
         self.last_fit_result: Optional[Dict[str, Any]] = None
         self.last_scan_result: Optional[Dict[str, Any]] = None
 
@@ -584,13 +586,18 @@ class HalfLifeFitter:
         bg: Optional[float] = None,
         freepars: Optional[List[bool]] = None,
         fit_range: Optional[Tuple[float, float]] = None,
-        max_nfev: int = 1000
+        max_nfev: int = 1000,
+        model: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Execute non-linear least squares fit using SciPy.
         """
         if self.spec is None or len(self.spec.x) == 0:
             raise ValueError("No spectrum loaded to fit.")
+        if model is not None:
+            if model not in ("convolved", "exponential"):
+                raise ValueError("Model must be 'convolved' or 'exponential'.")
+            self.model = model
 
         # Update initial parameters if provided. Interactive fitting is
         # restricted to right-side (nonnegative) lifetimes.
@@ -603,6 +610,9 @@ class HalfLifeFitter:
             self.freepars = [bool(f) for f in freepars]
             while len(self.freepars) < 5:
                 self.freepars.append(False)
+        if self.model == "exponential":
+            self.pars[1] = 0.0
+            self.freepars[1] = False
 
         if fit_range is not None:
             self.active_range = fit_range
@@ -669,7 +679,7 @@ class HalfLifeFitter:
 
         for idx in free_indices:
             if idx == 0:  # t12: nonnegative, identifiable within the fitted span
-                lower_bounds.append(0.0)
+                lower_bounds.append(max(1e-9, abs(dx) * 1e-6) if self.model == "exponential" else 0.0)
                 upper_bounds.append(max(10.0 * span, 1e-6))
             elif idx == 1:  # FWHM: prompt width should remain narrow
                 lower_bounds.append(0.0)
@@ -731,6 +741,7 @@ class HalfLifeFitter:
         residuals_full = (y_full - y_model_full) / dy_full
 
         result_dict = {
+            "model": self.model,
             "success": bool(res.success),
             "status_message": res.message,
             "nfev": int(res.nfev),
@@ -911,7 +922,8 @@ class HalfLifeFitter:
         # Dense fit curve for smooth vector line
         x_dense = np.linspace(r0, r1, 1000)
         y_dense = eval_halflife(x_dense, res["t12"], res["fwhm"], res["centroid"], res["scale"], res["bg"])
-        ax_main.plot(x_dense, y_dense, color="#dc2626", linewidth=1.8, label="Convoluted Fit")
+        fit_label = "Exponential Fit" if res.get("model") == "exponential" else "Convoluted Fit"
+        ax_main.plot(x_dense, y_dense, color="#dc2626", linewidth=1.8, label=fit_label)
 
         # Background Line
         ax_main.axhline(res["bg"], color="#2563eb", linestyle="--", linewidth=1.2, label=f"Background ({res['bg']:.1f})")
@@ -953,9 +965,10 @@ class HalfLifeFitter:
         # even if the legend grows or shrinks. Scale is deliberately omitted: it is
         # an overall normalisation, not a fitted decay parameter, and the figure
         # needs no amplitude calibration.
-        info_text = (
-            f"$t_{{1/2}} = {res['t12']:.3f} \\pm {res['t12_err']:.3f}$\n"
-            f"FWHM $= {res['fwhm']:.3f} \\pm {res['fwhm_err']:.3f}$\n"
+        info_text = f"$t_{{1/2}} = {res['t12']:.3f} \\pm {res['t12_err']:.3f}$\n"
+        if res.get("model") != "exponential":
+            info_text += f"FWHM $= {res['fwhm']:.3f} \\pm {res['fwhm_err']:.3f}$\n"
+        info_text += (
             f"Centroid $= {res['centroid']:.2f} \\pm {res['centroid_err']:.2f}$\n"
             f"$\\chi^2/\\mathrm{{NDF}} = {res['chisq_ndf']:.3f}$"
         )
@@ -1041,11 +1054,12 @@ def run_interactive_cli(initial_file: Optional[str] = None):
         print(" 8) Write output with current values of parameters")
         print(" 9) Export spectrum as 3-column ASCII (x y dy)")
         print(" 10) Export publication vector PDF plot")
+        print(f" 11) Select fit model (current: {fitter.model})")
         print(" 0) Quit")
         print("─" * 50)
 
         try:
-            choice_str = input("Select mode [0-10]: ").strip()
+            choice_str = input("Select mode [0-11]: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             break
@@ -1055,7 +1069,7 @@ def run_interactive_cli(initial_file: Optional[str] = None):
         try:
             mode = int(choice_str)
         except ValueError:
-            print("[!] Invalid input. Please enter a number from 0 to 10.")
+            print("[!] Invalid input. Please enter a number from 0 to 11.")
             continue
 
         if mode == 0:
@@ -1137,7 +1151,7 @@ def run_interactive_cli(initial_file: Optional[str] = None):
                 print("[!] Please load a spectrum file first (Mode 1).")
                 continue
 
-            print("\n[*] Performing non-linear convolution fit...")
+            print(f"\n[*] Performing {fitter.model} fit...")
             try:
                 res = fitter.fit()
                 print("\n" + "═" * 45)
@@ -1237,6 +1251,15 @@ def run_interactive_cli(initial_file: Optional[str] = None):
             fitter.export_plot(out_pdf)
             print(f"[+] Vector PDF plot exported to: {out_pdf}")
 
+        elif mode == 11:
+            choice = input("Model [convolved/exponential]: ").strip().lower()
+            if choice in ("convolved", "exponential"):
+                fitter.model = choice
+                fitter.last_fit_result = None
+                print(f"[+] Selected {choice} model.")
+            else:
+                print("[!] Choose 'convolved' or 'exponential'.")
+
 
 # ==============================================================================
 # 5. COMMAND-LINE INTERFACE (SCRIPTABLE & BATCH EXECUTION)
@@ -1256,12 +1279,16 @@ Examples:
 
   # 3. Fit with fixed FWHM and background chi^2 profiling:
   python3 halflife.py spectrum.dat --fwhm 18.2 --fix-fwhm --scan-bg --pdf spectrum_fit.pdf --json
+
+  # 4. Pure exponential decay with a fixed onset:
+  python3 halflife.py spectrum.dat --model exponential --centroid 450 --fix-centroid --range 450 750
         """
     )
     parser.add_argument("file", nargs="?", default=None, help="Input ASCII spectrum .dat/.txt file")
     parser.add_argument("-i", "--interactive", action="store_true", help="Launch interactive menu mode (halflife.c REPL)")
     parser.add_argument("--t12", type=float, default=None, help="Initial guess for half-life (t_1/2)")
     parser.add_argument("--fwhm", type=float, default=None, help="Initial guess for prompt peak FWHM")
+    parser.add_argument("--model", choices=("convolved", "exponential"), default="convolved", help="Fit model (default: convolved); exponential sets FWHM to zero")
     parser.add_argument("--centroid", type=float, default=None, help="Initial guess for prompt peak centroid")
     parser.add_argument("--scale", type=float, default=None, help="Initial guess for scaling factor / area")
     parser.add_argument("--bg", type=float, default=None, help="Initial guess for constant background offset")
@@ -1314,6 +1341,12 @@ Examples:
     ]
 
     fit_range = tuple(args.range) if args.range else None
+    fitter.model = args.model
+    if fit_range is not None:
+        fitter.active_range = fit_range
+    if args.model == "exponential":
+        fitter.pars[1] = 0.0
+        fitter.freepars[1] = False
 
     try:
         if args.scan_bg:
@@ -1328,7 +1361,8 @@ Examples:
             scale=args.scale,
             bg=args.bg,
             freepars=freepars,
-            fit_range=fit_range
+            fit_range=fit_range,
+            model=args.model
         )
 
         if args.json:
@@ -1344,7 +1378,9 @@ Examples:
             bg_status = f"+/- {res['bg_err']:.2f}" if freepars[4] else "(FIXED / not fitted)"
 
             print(f"  Half-Life (t_1/2):   {res['t12']:9.3f} {t12_status} {fitter.spec.x_label}")
-            print(f"  Prompt FWHM:         {res['fwhm']:9.3f} {fwhm_status} {fitter.spec.x_label}")
+            print(f"  Model:               {res['model']}")
+            if res['model'] != 'exponential':
+                print(f"  Prompt FWHM:         {res['fwhm']:9.3f} {fwhm_status} {fitter.spec.x_label}")
             print(f"  Centroid:            {res['centroid']:9.2f} {cent_status}")
             print(f"  Scaling Factor:      {res['scale']:9.2f} {scale_status}")
             print(f"  Background Level:    {res['bg']:9.2f} {bg_status}")
