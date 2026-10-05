@@ -54,6 +54,7 @@ except Exception:
 
 from cmat import CMATReader
 from root_matrix import ROOTMatrixReader, split_matrix_spec, matrix_spec, list_root_histograms, describe_root_histograms
+from root_http import ROOTHTTPReader, histogram_url, list_http_histograms, infer_server_url, normalize_url
 
 CONFIG_FILENAME = "python-cmat-config.txt"
 
@@ -4194,6 +4195,8 @@ class CMATSession:
     """
     def __init__(self, config: dict = None, config_path: Path = None):
         self.matrices = []
+        self.live_browser_url = ""
+        self.cube_session = None
         self.active_index = 0
         self.config = config.copy() if config else DEFAULT_CONFIG.copy()
         self.config_path = config_path
@@ -4280,6 +4283,78 @@ class CMATSession:
         }
         self.matrices.append(entry)
         return len(self.matrices) - 1
+
+    def add_live_histogram(self, url, interval=2.0):
+        source = histogram_url(url)
+        for m in self.matrices:
+            if m["path"] == source:
+                # Explicit reconnect also accepts a histogram whose axes changed.
+                reader = ROOTHTTPReader(source)
+                mat = reader.to_numpy()
+                if mat.shape != m["matrix"].shape or reader.cal != m["reader"].cal:
+                    self.gates = {0: None, 1: None}
+                m.update(reader=reader, matrix=mat, proj_x=reader.get_projection(0),
+                         proj_y=reader.get_projection(1), shape=[reader.res1, reader.res2],
+                         shape_yx=[reader.res2, reader.res1], cal=reader.cal.copy(),
+                         is_1d=reader.ndim == 1, is_symmetric=reader.is_symmetric,
+                         total_counts=float(mat.sum()), max_count=float(mat.max()),
+                         nonzero_bins=int(np.count_nonzero(mat)))
+                m["proj"] = m["proj_x"]
+                m["live"].update(connected=True, error="", last_updated=time.time(),
+                                 last_checked=time.time(), revision=m["live"]["revision"] + 1)
+                return m["index"]
+        reader = ROOTHTTPReader(source)
+        mat = reader.to_numpy()
+        entry = {"index": len(self.matrices), "name": reader.object_name + " [live]",
+                 "filename": reader.object_name, "path": source, "reader": reader,
+                 "matrix": mat, "proj_x": reader.get_projection(0),
+                 "proj_y": reader.get_projection(1), "shape": [reader.res1, reader.res2],
+                 "shape_yx": [reader.res2, reader.res1], "total_counts": float(mat.sum()),
+                 "max_count": float(mat.max()), "nonzero_bins": int(np.count_nonzero(mat)),
+                 "is_symmetric": reader.is_symmetric, "is_1d": reader.ndim == 1,
+                 "cal": reader.cal.copy(),
+                 "live": {"url": source, "interval": interval, "revision": 1,
+                          "server_url": infer_server_url(source),
+                          "paused": False, "connected": True, "error": "",
+                          "last_updated": time.time(), "last_checked": time.time()}}
+        entry["proj"] = entry["proj_x"]
+        self.matrices.append(entry)
+        return entry["index"]
+
+    def refresh_live_histogram(self, force=False):
+        m = self.get_active_matrix()
+        if not m or not m.get("live"):
+            return False
+        live = m["live"]
+        if live["paused"] and not force:
+            return False
+        # Only this explicit refresh mutates data. Tiles and fits never fetch
+        # upstream, and a failed fetch leaves the complete old snapshot intact.
+        try:
+            reader = ROOTHTTPReader(live["url"])
+            previous = m["reader"]
+            if (reader.to_numpy().shape != m["matrix"].shape or reader.cal != previous.cal
+                    or reader.ndim != previous.ndim or reader.axis_labels != previous.axis_labels):
+                raise ValueError("Histogram axes changed. Reconnect to load the new binning.")
+            changed = not np.array_equal(reader.to_numpy(), m["matrix"])
+            live.update(connected=True, error="", last_checked=time.time())
+            m["reader"] = reader
+            if changed:
+                mat = reader.to_numpy()
+                m.update(reader=reader, matrix=mat, proj_x=reader.get_projection(0),
+                         proj_y=reader.get_projection(1), total_counts=float(mat.sum()),
+                         max_count=float(mat.max()), nonzero_bins=int(np.count_nonzero(mat)),
+                         is_symmetric=reader.is_symmetric)
+                m["proj"] = m["proj_x"]
+                live.update(revision=live["revision"] + 1, last_updated=time.time())
+                # Headless gate results are cached; discard their computed data.
+                for axis, gate in self.gates.items():
+                    if gate:
+                        self.gates[axis] = compute_1d_gate(mat, axis, gate.get("valid_w", []), gate.get("valid_b", []))
+            return changed
+        except Exception as exc:
+            live.update(connected=False, error=str(exc), last_checked=time.time())
+            return False
 
     def get_active_matrix(self) -> dict:
         if self.matrices and 0 <= self.active_index < len(self.matrices):
@@ -5667,6 +5742,7 @@ def browse_filesystem(req_path: str = "") -> dict:
 class CMATWebHandler(BaseHTTPRequestHandler):
     session: "CMATSession" = None
     pending_root_files: list = []
+    pending_live_server: str = ""
     matrices: list = []
     active_index: int = 0
     reader: CMATReader = None
@@ -5723,10 +5799,12 @@ class CMATWebHandler(BaseHTTPRequestHandler):
     def get_metadata_dict(self):
         info = self.reader.get_info() if self.reader else {}
         active_mat = self.active_matrix_data
+        info["source_format"] = "ROOT" if isinstance(self.reader, ROOTMatrixReader) else ("GASP" if active_mat else None)
         if active_mat:
             info["filename"] = active_mat["name"]
             info["filepath"] = active_mat["path"]
             info["is_1d"] = active_mat.get("is_1d", False)
+            info["live"] = active_mat.get("live")
         session = self.get_session()
         c0 = session.get_cal(0)
         c1 = session.get_cal(1)
@@ -5742,13 +5820,15 @@ class CMATWebHandler(BaseHTTPRequestHandler):
         info["is_calibrated_0"] = session.is_calibrated(0)
         info["is_calibrated_1"] = session.is_calibrated(1)
         info["pending_root_files"] = list(self.pending_root_files)
+        info["pending_live_server"] = self.pending_live_server
+        info["live_browser_url"] = session.live_browser_url
         info["config"] = self.config or DEFAULT_CONFIG
         info["config_file"] = self.config_path.name if self.config_path else CONFIG_FILENAME
         if self.matrix is not None:
             info["shape"] = [self.matrix.shape[1], self.matrix.shape[0]]
             info["shape_yx"] = [self.matrix.shape[0], self.matrix.shape[1]]
-            info["max_count"] = int(np.max(self.matrix))
-            info["total_counts"] = int(np.sum(self.matrix))
+            info["max_count"] = float(np.max(self.matrix))
+            info["total_counts"] = float(np.sum(self.matrix))
             info["nonzero_bins"] = int(np.count_nonzero(self.matrix))
         else:
             info["max_count"] = 0
@@ -5777,7 +5857,52 @@ class CMATWebHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def send_json(self, payload, status=200):
+        self.send_response(status)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+    def end_headers(self):
+        if self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
+        m = self.get_active_matrix()
+        if m and m.get("live"):
+            self.send_header("X-Data-Revision", str(m["live"]["revision"]))
+        super().end_headers()
+
+    def dispatch_cube(self, method):
+        """Mount the 3D viewer on /cube using the same server and ROOT catalog."""
+        if self.path != "/cube" and not self.path.startswith("/cube/"):
+            return False
+        original_path = self.path
+        subpath = self.path[len("/cube"):] or "/"
+        # Discovery and selection are shared across both views.
+        if subpath.split("?", 1)[0] in ("/api/live_histograms", "/api/live_connect"):
+            self.path = subpath
+            try:
+                getattr(self, method)()
+            finally:
+                self.path = original_path
+            return True
+        cube_session = self.get_session().cube_session
+        if cube_session is None:
+            self.send_error(404, "Select a TH3 histogram from the histogram browser first")
+            return True
+        from cmat3d_webviewer import CMAT3DWebHandler
+        # Delegate this request without constructing a second socket handler.
+        cube_handler = CMAT3DWebHandler.__new__(CMAT3DWebHandler)
+        cube_handler.__dict__ = self.__dict__.copy()
+        cube_handler.path = subpath
+        cube_handler.api_prefix = "/cube"
+        cube_handler.get_session = lambda: cube_session
+        with cube_session.snapshot_lock:
+            getattr(cube_handler, method)()
+        return True
+
     def do_GET(self):
+        if self.dispatch_cube("do_GET"):
+            return
         if self.path == "/" or self.path.startswith("/index"):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
@@ -5791,6 +5916,17 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "shutting_down"}).encode("utf-8"))
             print("\n[*] Quit request received from browser. Server shutting down gracefully...\n", flush=True)
             threading.Timer(0.15, lambda: os._exit(0)).start()
+
+        elif self.path.startswith("/api/live_histograms"):
+            from urllib.parse import urlparse, parse_qs
+            try:
+                url = parse_qs(urlparse(self.path).query).get("url", [""])[0]
+                url = normalize_url(url)
+                details = list_http_histograms(url)
+                self.get_session().live_browser_url = url
+                self.send_json({"details": details, "server_url": url})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
 
         elif self.path == "/api/metadata":
             self.send_response(200)
@@ -6317,7 +6453,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             x = max(0, min(self.matrix.shape[1] - 1, int(float(query.get("x", [0])[0]))))
             y = max(0, min(self.matrix.shape[0] - 1, int(float(query.get("y", [0])[0]))))
-            val = int(self.matrix[y, x])
+            val = float(self.matrix[y, x])
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
@@ -6339,7 +6475,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
 
             # Exact pixel-matched downsampling or 1:1 slice
             if sh_x <= target_w and sh_y <= target_h:
-                out = np.ascontiguousarray(sub, dtype=np.int32)
+                out = np.ascontiguousarray(sub, dtype="<f8")
             else:
                 step_x = max(1, int(np.ceil(sh_x / target_w)))
                 step_y = max(1, int(np.ceil(sh_y / target_h)))
@@ -6356,13 +6492,14 @@ class CMATWebHandler(BaseHTTPRequestHandler):
 
                 # 2D Max pooling preserves all gamma coincidence peaks
                 out = sub_padded.reshape(new_h, step_y, new_w, step_x).max(axis=(1, 3))
-                out = np.ascontiguousarray(out[:target_h, :target_w], dtype=np.int32)
+                out = np.ascontiguousarray(out[:target_h, :target_w], dtype="<f8")
 
             actual_h, actual_w = out.shape
             self.send_response(200)
             self.send_header("Content-type", "application/octet-stream")
             self.send_header("X-Shape-W", str(actual_w))
             self.send_header("X-Shape-H", str(actual_h))
+            self.send_header("X-Data-Type", "float64")
             self.send_header("X-Slice-X0", str(x0))
             self.send_header("X-Slice-X1", str(x1))
             self.send_header("X-Slice-Y0", str(y0))
@@ -6971,6 +7108,60 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self):
+        if hasattr(self, "dispatch_cube") and self.dispatch_cube("do_POST"):
+            return
+        if self.path in ("/api/live_connect", "/api/live_refresh", "/api/live_control"):
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                session = self.get_session()
+                changed = False
+                if self.path == "/api/live_connect":
+                    interval = float(data.get("interval", 2))
+                    if not math.isfinite(interval) or not 0.5 <= interval <= 300:
+                        raise ValueError("Refresh interval must be between 0.5 and 300 seconds")
+                    server_url = normalize_url(data.get("server_url") or infer_server_url(data.get("url", "")))
+                    if str(data.get("type", "")).startswith("TH3"):
+                        from cmat3d_webviewer import MatrixSession3D
+                        cube_session = session.cube_session or MatrixSession3D(session.config)
+                        cube_session.add_root_cube(data.get("url", ""), max(1.0, interval))
+                        session.cube_session = cube_session
+                        session.live_browser_url = server_url
+                        CMATWebHandler.pending_live_server = ""
+                        self.send_json({"viewer_url": "/cube/"})
+                        return
+                    idx = session.add_live_histogram(data.get("url", ""), interval)
+                    session.select_matrix(idx)
+                    session.matrices[idx]["live"].update(interval=interval, paused=False)
+                    session.matrices[idx]["live"]["server_url"] = server_url
+                    session.live_browser_url = server_url
+                    CMATWebHandler.pending_live_server = ""
+                    changed = True
+                elif self.path == "/api/live_control":
+                    m = session.get_active_matrix()
+                    if not m or not m.get("live"):
+                        raise ValueError("No active live histogram")
+                    if "paused" in data:
+                        m["live"]["paused"] = bool(data["paused"])
+                    if "interval" in data:
+                        interval = float(data["interval"])
+                        if not math.isfinite(interval) or not 0.5 <= interval <= 300:
+                            raise ValueError("Refresh interval must be between 0.5 and 300 seconds")
+                        m["live"]["interval"] = interval
+                else:
+                    if data.get("index", session.active_index) != session.active_index:
+                        self.send_json({"changed": False, "metadata": self.get_metadata_dict()})
+                        return
+                    m = session.get_active_matrix()
+                    interval = float(data.get("interval", 2))
+                    if m and m.get("live") and math.isfinite(interval) and 0.5 <= interval <= 300:
+                        m["live"]["interval"] = interval
+                    changed = session.refresh_live_histogram(force=bool(data.get("force", False)))
+                CMATWebHandler.sync_class_attrs()
+                self.send_json({"changed": changed, "metadata": self.get_metadata_dict(), "viewer_url": "/"})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
+            return
+
         if self.path == "/api/save_config":
             try:
                 content_len = int(self.headers.get("Content-Length", 0))
@@ -7269,6 +7460,12 @@ def main():
         default=[],
         help="Input .cmat or ROOT file(s); for ROOT files with several histograms, choose in the browser or use file.root::directory/hist",
     )
+    parser.add_argument("--live", action="append", default=[], metavar="HISTOGRAM_URL",
+                        help="Connect to a ROOT HTTP histogram URL (repeat for multiple histograms)")
+    parser.add_argument("--live-server", default="", metavar="SERVER_URL",
+                        help="Start with the live ROOT server histogram browser")
+    parser.add_argument("--live-interval", type=float, default=2.0,
+                        help="Live refresh interval in seconds, 0.5–300 (default: 2)")
     parser.add_argument(
         "-m", "--macro",
         type=str,
@@ -7349,6 +7546,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if not math.isfinite(args.live_interval) or not 0.5 <= args.live_interval <= 300:
+        parser.error("--live-interval must be between 0.5 and 300 seconds")
 
     # Expand any globs/wildcards in input arguments
     file_paths = []
@@ -7412,6 +7611,12 @@ def main():
                 continue
         session.add_matrix_file(p, cal=explicit_cal or None)
 
+    for url in args.live:
+        try:
+            session.add_live_histogram(url, args.live_interval)
+        except Exception as exc:
+            parser.error(f"Could not connect to live histogram: {exc}")
+
     # Check for Headless Mode: Macro, Batch Command, or Interactive REPL
 
     if is_headless_mode:
@@ -7442,7 +7647,7 @@ def main():
         sys.exit(0 if success else 1)
 
     # Otherwise: Web Viewer Mode
-    if not unique_paths:
+    if not unique_paths and not args.live and not args.live_server:
         # Check if default GeE-symm.cmat exists in cwd
         def_file = Path.cwd() / "GeE-symm.cmat"
         if def_file.exists():
@@ -7473,6 +7678,7 @@ def main():
 
     CMATWebHandler.session = session
     CMATWebHandler.pending_root_files = pending_root_files
+    CMATWebHandler.pending_live_server = args.live_server
     CMATWebHandler.config = config
     CMATWebHandler.config_path = config_path
     CMATWebHandler.sync_class_attrs()
