@@ -1095,6 +1095,9 @@ def compute_3d_gate(
             if n1 == 0 or n2 == 0:
                 return np.zeros(target_res, dtype=np.float64)
 
+            if hasattr(reader, "project_masks"):
+                return reader.project_masks(target_axis, {g1: m1, g2: m2})
+
             idx1 = np.where(m1)[0]
             idx2 = np.where(m2)[0]
             if len(idx1) == 0 or len(idx2) == 0:
@@ -1220,7 +1223,9 @@ def _extract_banana_spectrum(
     if pixel_count == 0:
         return np.zeros(target_res, dtype=np.float64), 0, surface_area, 0
 
-    if plane == "0-1":
+    if hasattr(reader, "project_polygon_mask"):
+        spec = reader.project_polygon_mask(plane, mask, x_min, y_min)
+    elif plane == "0-1":
         sub = reader.get_subvolume((x_min, x_max), (y_min, y_max), (0, reader.res3)).astype(np.float64)
         spec = np.sum(sub * mask[np.newaxis, :, :], axis=(1, 2), dtype=np.float64)
     elif plane == "0-2":
@@ -1444,8 +1449,20 @@ def compute_2d_gamba_gate(
     s_bgp_scale = (float(area_pp) / float(area_bgp)) if area_bgp > 0 else 0.0
     s_bgbg_scale = (float(area_pp) / float(area_bgbg)) if area_bgbg > 0 else 0.0
 
-    # Extract 3D subvolume across the bounding ROI and project 4 discrete regions onto target_axis
-    if plane == "0-1":
+    # Sparse readers can project the ROI masks without allocating a subvolume.
+    if hasattr(reader, "project_masks"):
+        ax_x, ax_y = {"0-1": (0, 1), "0-2": (0, 2), "1-2": (1, 2)}[plane]
+        def project_roi(mx_mask, my_mask):
+            full_x = np.zeros(reader.shape[ax_x], dtype=bool)
+            full_y = np.zeros(reader.shape[ax_y], dtype=bool)
+            full_x[x_min:x_max + 1] = mx_mask
+            full_y[y_min:y_max + 1] = my_mask
+            return reader.project_masks(target_axis, {ax_x: full_x, ax_y: full_y})
+        s_pp = project_roi(mask_peak_x, mask_peak_y)
+        s_pbg = project_roi(mask_peak_x, mask_bg_y)
+        s_bgp = project_roi(mask_bg_x, mask_peak_y)
+        s_bgbg = project_roi(mask_bg_x, mask_bg_y)
+    elif plane == "0-1":
         sub_3d = reader.get_subvolume((x_min, x_max + 1), (y_min, y_max + 1), (0, reader.res3)).astype(np.float64)
         s_pp = np.sum(sub_3d[:, py0:py1 + 1, px0:px1 + 1], axis=(1, 2), dtype=np.float64) if area_pp > 0 else np.zeros(target_res)
         s_pbg = np.sum(sub_3d[:, mask_bg_y, :][:, :, mask_peak_x], axis=(1, 2), dtype=np.float64) if area_pbg > 0 else np.zeros(target_res)

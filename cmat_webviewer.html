@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GASPware 2D Matrix Interactive Viewer</title>
+<title>GASP visualiser</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
   body {
@@ -722,7 +722,7 @@
 <header>
   <div class="title">
     <button id="btnToggleSidebar" class="btn-sidebar-toggle" title="Toggle Sidebar Menu [M]">Menu</button>
-    <span>GASPware Visualizer</span>
+    <span id="viewerBrand">GASP visualiser</span>
   </div>
 
   <div class="matrix-bar">
@@ -762,6 +762,33 @@
       </div>
       <button id="btnOpenServerBrowser" class="primary" style="margin-bottom: 4px; background: linear-gradient(135deg, #00897b, #004d40); border: 1px solid #00bfa5; font-size: 0.78rem; padding: 6px 10px; font-weight: 600; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Browse Server Filesystem to Open Matrix [Ctrl+O]">📂 Browse Server Matrices...</button>
       <button id="btnRootHistograms" class="secondary" style="display:none; margin-bottom: 4px; width:100%; font-size:0.78rem;" title="Choose another TH1 or TH2 from this ROOT file">📊 Browse ROOT Histograms...</button>
+      <div style="border-top:1px solid #333;margin-top:6px;padding-top:8px;font-size:0.75rem;">
+        <label for="liveSourceURL">Live ROOT / c4Root server</label>
+        <input id="liveSourceURL" type="url" placeholder="http://localhost:1111" style="width:100%;box-sizing:border-box;margin:5px 0;" aria-label="ROOT server or histogram URL">
+        <div style="display:flex;gap:5px;align-items:center;">
+          <button id="btnLiveConnect" class="secondary" style="flex:1;">Connect</button>
+          <select id="liveInterval" aria-label="Live refresh interval"><option value="1">1 s</option><option value="2" selected>2 s</option><option value="5">5 s</option><option value="10">10 s</option></select>
+        </div>
+        <div id="liveBrowser" style="display:none;margin-top:8px;border:1px solid #37474f;border-radius:4px;padding:6px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <strong style="flex:1;">Live histograms</strong>
+            <button id="btnLiveListRefresh" class="secondary" style="padding:3px 6px;" title="Discover new histograms on the connected server">Refresh list</button>
+          </div>
+          <div id="liveBrowserServer" style="color:#90caf9;overflow-wrap:anywhere;margin:4px 0;"></div>
+          <input id="liveHistogramSearch" type="search" placeholder="Search histogram names or folders…" aria-label="Search live histograms" style="width:100%;box-sizing:border-box;">
+          <div id="liveBrowserStatus" role="status" style="color:#aaa;margin:4px 0;"></div>
+          <div id="liveHistogramTree" aria-label="Live histogram folders" style="max-height:260px;overflow:auto;"></div>
+        </div>
+        <div id="liveControls" style="display:none;margin-top:6px;">
+          <div id="liveStatus" role="status" style="color:#69f0ae;overflow-wrap:anywhere;"></div>
+          <div style="display:flex;gap:5px;margin:5px 0;">
+            <button id="btnLivePause" class="secondary">Pause updates</button>
+            <button id="btnLiveRefresh" class="secondary">Refresh now</button>
+          </div>
+          <label><input id="liveAutoFit" type="checkbox"> Refit peaks after updates</label>
+          <div style="color:#aaa;margin-top:4px;">Pause for a fixed snapshot. Existing fits remain from their last fit until refitted. Half-life fits run on request.</div>
+        </div>
+      </div>
       <small style="color: #888; font-size: 0.65rem; display: block; margin-top: 5px; line-height: 1.2;">
         💡 Zoom, coincidence gates, and peak fits are locked and automatically re-evaluated across matrices for 1:1 differential analysis.
       </small>
@@ -1609,10 +1636,20 @@
     }, 2500);
   }
 
+  function updateViewerBrand() {
+    const root = metadata?.source_format === 'ROOT' || metadata?.root_histogram || metadata?.live ||
+      (!metadata?.source_format && (metadata?.pending_root_files?.length || metadata?.pending_live_server || metadata?.live_browser_url));
+    const brand = root ? 'ROOT visualiser' : 'GASP visualiser';
+    document.getElementById('viewerBrand').textContent = brand;
+    document.title = brand;
+  }
+
   function updateMatrixUI() {
+    updateViewerBrand();
+    updateLiveUI();
     if (!metadata) return;
     const rootButton = document.getElementById('btnRootHistograms');
-    if (rootButton) rootButton.style.display = metadata.root_histogram ? 'block' : 'none';
+    if (rootButton) rootButton.style.display = metadata.root_histogram && !metadata.live ? 'block' : 'none';
     const changedDimension = document.body.classList.contains('one-dimensional') !== Boolean(metadata.is_1d);
     document.body.classList.toggle('one-dimensional', Boolean(metadata.is_1d));
     if (changedDimension) {
@@ -2088,6 +2125,213 @@
 
   let rootPickerPath = '';
   let rootPickerEntries = [];
+  let liveUpdateBusy = false;
+  let liveBrowserServer = '';
+  let liveBrowserEntries = [];
+  let liveBrowserBusy = false;
+  let lastLiveTreeSelection = '';
+  const liveExpandedFolders = new Map();
+
+  function updateLiveTreeSelection(reveal=false) {
+    const activeURL = metadata?.live?.url || '';
+    reveal = reveal || activeURL !== lastLiveTreeSelection;
+    lastLiveTreeSelection = activeURL;
+    for (const button of document.querySelectorAll('#liveHistogramTree .live-histogram')) {
+      const active = button.dataset.url === activeURL;
+      button.setAttribute('aria-pressed', String(active));
+      button.style.background = active ? '#164e63' : 'transparent';
+      button.style.borderLeft = active ? '3px solid #00e5ff' : '3px solid transparent';
+      if (active && reveal) {
+        for (let parent = button.parentElement; parent; parent = parent.parentElement) {
+          if (parent.tagName === 'DETAILS') parent.open = true;
+        }
+      }
+    }
+  }
+
+  function renderLiveHistogramTree() {
+    const tree = document.getElementById('liveHistogramTree');
+    const scroll = tree.scrollTop;
+    tree.replaceChildren();
+    const query = document.getElementById('liveHistogramSearch').value.trim().toLowerCase();
+    const matches = liveBrowserEntries.filter(entry => `${entry.name} ${entry.type}`.toLowerCase().includes(query));
+    document.getElementById('liveBrowserStatus').textContent = `${matches.length} of ${liveBrowserEntries.length} histograms · click a spectrum to display it`;
+    const root = {folders:new Map(), histograms:[]};
+    for (const entry of matches) {
+      const parts = entry.name.split('/');
+      let node = root;
+      for (const part of parts.slice(0,-1)) {
+        if (!node.folders.has(part)) node.folders.set(part, {folders:new Map(), histograms:[]});
+        node = node.folders.get(part);
+      }
+      node.histograms.push(entry);
+    }
+    function appendNode(node, target, path='', depth=0) {
+      for (const [name, child] of node.folders) {
+        const folderPath = [path,name].filter(Boolean).join('/');
+        const folder = document.createElement('details');
+        folder.dataset.folder = folderPath;
+        folder.open = Boolean(query) || (liveExpandedFolders.has(folderPath) ? liveExpandedFolders.get(folderPath) : depth < 2);
+        const summary = document.createElement('summary');
+        summary.textContent = name;
+        summary.style.cssText = 'cursor:pointer;padding:4px;color:#ffd600;overflow-wrap:anywhere;';
+        const content = document.createElement('div');
+        content.style.paddingLeft = '10px';
+        folder.append(summary, content);
+        folder.addEventListener('toggle', () => {
+          if (!document.getElementById('liveHistogramSearch').value.trim()) liveExpandedFolders.set(folderPath, folder.open);
+        });
+        appendNode(child, content, folderPath, depth+1);
+        target.appendChild(folder);
+      }
+      for (const entry of node.histograms) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'live-histogram';
+        button.dataset.url = entry.url;
+        button.title = entry.name;
+        button.style.cssText = 'display:block;width:100%;text-align:left;padding:5px;border:0;border-radius:3px;color:#e2e8f0;cursor:pointer;overflow-wrap:anywhere;';
+        const label = document.createElement('span');
+        label.textContent = entry.name.split('/').pop();
+        const type = document.createElement('small');
+        type.textContent = ` ${entry.type}`;
+        type.style.color = '#90caf9';
+        button.append(label,type);
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            while (liveUpdateBusy || isSwitchingMatrix) await new Promise(resolve => window.setTimeout(resolve, 100));
+            await connectLiveHistogram(entry.url, liveBrowserServer, entry.type);
+          }
+          finally { button.disabled = false; }
+        });
+        target.appendChild(button);
+      }
+    }
+    appendNode(root, tree);
+    if (!matches.length) tree.textContent = 'No matching histograms.';
+    updateLiveTreeSelection(true);
+    tree.scrollTop = scroll;
+  }
+
+  function updateLiveUI() {
+    updateLiveTreeSelection();
+    const live = metadata?.live;
+    document.getElementById('liveControls').style.display = live ? 'block' : 'none';
+    if (!live) return;
+    const intervalSelect = document.getElementById('liveInterval');
+    if (![...intervalSelect.options].some(option => Number(option.value) === live.interval)) {
+      intervalSelect.add(new Option(`${live.interval} s`, String(live.interval)));
+    }
+    intervalSelect.value = String(live.interval);
+    const status = document.getElementById('liveStatus');
+    const checked = new Date(live.last_checked * 1000).toLocaleTimeString();
+    status.textContent = live.connected
+      ? `${live.paused ? 'Paused' : 'Live'} · snapshot ${live.revision} · checked ${checked}`
+      : `Disconnected · showing snapshot ${live.revision} · ${live.paused ? 'paused' : 'retrying'}. ${live.error}`;
+    status.style.color = live.connected ? '#69f0ae' : '#ffb74d';
+    document.getElementById('btnLivePause').textContent = live.paused ? 'Resume updates' : 'Pause updates';
+  }
+
+  async function livePost(path, body) {
+    const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Live request failed');
+    return data;
+  }
+
+  async function connectLiveHistogram(url, server_url='', type='') {
+    if (liveUpdateBusy || isSwitchingMatrix) return false;
+    liveUpdateBusy = true;
+    try {
+      const data = await livePost('/api/live_connect', {url, server_url, type, interval:Number(document.getElementById('liveInterval').value)});
+      if (data.viewer_url === '/cube/') {
+        window.location.assign(data.viewer_url);
+        return true;
+      }
+      const previous = metadata;
+      metadata = data.metadata;
+      const shapeChanged = !previous?.shape || previous.is_1d !== metadata.is_1d || previous.shape.join() !== metadata.shape.join();
+      updateMatrixUI();
+      if (shapeChanged) view = {x0:0, x1:metadata.shape[0], y0:0, y1:metadata.shape[1]};
+      if (shapeChanged) {
+        gate1DState = {axis:null, w_gates:[], b_gates:[], pending_w:null, pending_b:null, last_res:null};
+        updateGateUI();
+        clearAllFits();
+      }
+      await fetchTileAndRender();
+      await fetch1DProjection();
+      if (!shapeChanged) await reapplyGates();
+      renderBoth1DSpectra();
+      showMatrixToast(`Connected: ${metadata.filename}`);
+      if (metadata.live_browser_url && metadata.live_browser_url !== liveBrowserServer) {
+        await browseLiveServer(metadata.live_browser_url);
+      }
+      return true;
+    } catch (error) {
+      showMatrixToast(`Live connection failed: ${error.message}`, true);
+      return false;
+    } finally { liveUpdateBusy = false; }
+  }
+
+  async function refreshLiveHistogram(force=false) {
+    if (!metadata?.live || liveUpdateBusy || isSwitchingMatrix) return;
+    const index = metadata.active_index;
+    liveUpdateBusy = true;
+    try {
+      const data = await livePost('/api/live_refresh', {index, force, interval:Number(document.getElementById('liveInterval').value)});
+      if (metadata.active_index !== index) return;
+      metadata = data.metadata;
+      if (data.changed) {
+        updateMatrixUI();
+        await fetchTileAndRender();
+        await fetch1DProjection();
+        await reapplyGates();
+        if (document.getElementById('liveAutoFit').checked) await reapplyAllPersistentFits();
+        render2D();
+        renderBoth1DSpectra();
+      } else updateLiveUI();
+    } catch (error) {
+      const status = document.getElementById('liveStatus');
+      status.textContent = `Refresh failed; last snapshot retained. ${error.message}`;
+      status.style.color = '#ffb74d';
+    } finally { liveUpdateBusy = false; }
+  }
+
+  async function liveRefreshLoop() {
+    if (!document.hidden && metadata?.live && !metadata.live.paused) await refreshLiveHistogram();
+    const interval = Number(document.getElementById('liveInterval').value) || 2;
+    window.setTimeout(liveRefreshLoop, interval * 1000);
+  }
+
+  async function browseLiveServer(url) {
+    if (liveBrowserBusy) return;
+    liveBrowserBusy = true;
+    document.getElementById('liveBrowser').style.display = 'block';
+    const status = document.getElementById('liveBrowserStatus');
+    status.textContent = 'Reading live ROOT hierarchy…';
+    document.getElementById('btnLiveListRefresh').disabled = true;
+    try {
+      const res = await fetch('/api/live_histograms?url=' + encodeURIComponent(url));
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Could not browse ROOT server');
+      if (liveBrowserServer !== data.server_url) {
+        liveExpandedFolders.clear();
+        document.getElementById('liveHistogramSearch').value = '';
+      }
+      liveBrowserServer = data.server_url;
+      liveBrowserEntries = data.details;
+      document.getElementById('liveSourceURL').value = liveBrowserServer;
+      document.getElementById('liveBrowserServer').textContent = liveBrowserServer;
+      renderLiveHistogramTree();
+      if (!liveBrowserEntries.length) status.textContent = 'No TH1/TH2 histograms found. You can connect with a direct root.json URL.';
+    } catch (error) {
+      status.textContent = `${error.message}${liveBrowserEntries.length ? ' Previous histogram list retained.' : ' You can also connect with a direct root.json URL.'}`;
+    } finally {
+      liveBrowserBusy = false;
+      document.getElementById('btnLiveListRefresh').disabled = false;
+    }
+  }
 
   function closeRootHistogramPicker() {
     document.getElementById('rootPickerModal').style.display = 'none';
@@ -2361,6 +2605,12 @@
     }
 
     setupEvents();
+    window.setTimeout(liveRefreshLoop, 2000);
+    const rememberedLiveServer = metadata.pending_live_server || metadata.live_browser_url || metadata.live?.server_url;
+    if (rememberedLiveServer) {
+      document.getElementById('liveSourceURL').value = rememberedLiveServer;
+      await browseLiveServer(rememberedLiveServer);
+    }
     fetchFitLogStatus();
     updateScaleBadge2D();
     if (!metadata.shape) {
@@ -2385,7 +2635,7 @@
     tileH = parseInt(res.headers.get('X-Shape-H')) || reqH;
     const buf = await res.arrayBuffer();
 
-    currentTileData = new Int32Array(buf);
+    currentTileData = res.headers.get('X-Data-Type') === 'float64' ? new Float64Array(buf) : new Int32Array(buf);
     let maxVal = 0;
     for (let i = 0; i < currentTileData.length; i++) {
       if (currentTileData[i] > maxVal) maxVal = currentTileData[i];
@@ -6163,6 +6413,37 @@
     const btnHeaderOpen = document.getElementById('btnHeaderOpenBrowser');
     if (btnHeaderOpen) btnHeaderOpen.addEventListener('click', () => openServerBrowser());
     const btnRootHistograms = document.getElementById('btnRootHistograms');
+    document.getElementById('btnLiveConnect').addEventListener('click', async () => {
+      const url = document.getElementById('liveSourceURL').value.trim();
+      if (!url) return showMatrixToast('Enter a ROOT server or histogram URL', true);
+      if (/\/root\.json(?:\.gz)?(?:\?|$)/.test(url)) await connectLiveHistogram(url);
+      else await browseLiveServer(url);
+    });
+    document.getElementById('btnLiveListRefresh').addEventListener('click', () => {
+      const url = liveBrowserServer || document.getElementById('liveSourceURL').value.trim();
+      if (url) browseLiveServer(url);
+    });
+    document.getElementById('liveHistogramSearch').addEventListener('input', renderLiveHistogramTree);
+    document.getElementById('liveSourceURL').addEventListener('keydown', event => {
+      if (event.key === 'Enter') document.getElementById('btnLiveConnect').click();
+    });
+    document.getElementById('btnLivePause').addEventListener('click', async () => {
+      try {
+        if (!metadata?.live || liveUpdateBusy) return;
+        const data = await livePost('/api/live_control', {paused:!metadata.live.paused});
+        metadata = data.metadata;
+        updateLiveUI();
+      } catch (error) { showMatrixToast(error.message, true); }
+    });
+    document.getElementById('btnLiveRefresh').addEventListener('click', () => refreshLiveHistogram(true));
+    document.getElementById('liveInterval').addEventListener('change', async () => {
+      if (!metadata?.live) return;
+      try {
+        const data = await livePost('/api/live_control', {interval:Number(document.getElementById('liveInterval').value)});
+        metadata = data.metadata;
+        updateLiveUI();
+      } catch (error) { showMatrixToast(error.message, true); }
+    });
     if (btnRootHistograms) btnRootHistograms.addEventListener('click', () => {
       const rootPath = (metadata?.filepath || '').split('::')[0];
       if (rootPath) openRootHistogramPicker(rootPath);

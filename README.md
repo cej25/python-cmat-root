@@ -93,6 +93,79 @@ On modern Linux distributions (e.g. Ubuntu 23.04+, Debian 12+), `pip` prevents i
 ### 2. Launch Interactive Web Viewers
 
 #### Unified Launcher (`pycmat`)
+Live ROOT / c4Root HTTP sources are also supported. Start a viewer with the
+server's histogram browser:
+
+```bash
+./pycmat --live-server http://localhost:1111 --port 8080
+```
+
+Use **Live ROOT / c4Root server → Connect** in the sidebar. A persistent
+**Live histograms** folder tree lists all discovered TH1/TH2/TH3 objects. Click a
+histogram to display it. TH3 opens the 3D viewer on the same port; its
+**Histogram browser** link returns to the shared menu. TH1/TH2 keep the tree
+open for switching to another spectrum. The page heading and tab title show
+**ROOT visualiser** for ROOT sources and **GASP visualiser** for CMAT sources.
+Search matches histogram names, folder paths, or types. The active histogram
+is highlighted. **Refresh list** discovers newly created objects and retains
+the previous list if the server cannot be reached. The server address remains
+separate from the chosen histogram and is restored when the viewer page reloads
+within the same Python session. You can also paste an individual `root.json`
+URL in the connection field. Direct startup is
+also supported:
+
+```bash
+./pycmat --live 'http://localhost:1111/Histograms/LISA_FAST/SlowToT/h1_lisafast_slowToT_1/root.json' --live-interval 2
+./pycmat --live 'http://localhost:1111/Histograms/LISA_FAST/Fast_Vs._Slow/h2_lisafast_fast_v_slow_ToT_1/root.json' --live-interval 2
+```
+
+The source URL is fetched by the **Python viewer server**. `localhost` therefore
+refers to the computer running Python, not necessarily the computer displaying
+the browser. Use the c4Root hostname or an SSH-forwarded local port when needed.
+Keep the viewer and c4Root on different ports.
+
+Live display refreshes the active histogram every selected interval while the
+viewer tab is visible. Projections and the active 1D gate are recalculated;
+zoom and gate definitions are retained. **Pause updates** freezes a snapshot
+for analysis; **Refresh now** fetches one snapshot even while paused. Resume
+restarts polling. Fits remain from their last calculation until you fit again;
+the optional **Refit peaks after updates** reruns persistent single/multiplet
+and 2D peak fits. Half-life fits and polygon integrations run on request.
+Pause for a fixed dataset when comparing fit results or exporting figures.
+
+Failed refreshes retain the last good histogram, display the connection error,
+and retry automatically. A changed binning or calibration requires an explicit
+reconnect. Histogram reset/count decreases are accepted as new snapshots.
+ROOT float bin values are retained; underflow/overflow bins are excluded from
+the displayed spectrum. Uniform binning is required. The connection is read-only:
+it does not change c4Root gates, calibration, histogram resets, or acquisition.
+Full histogram snapshots are transferred; start with a few-second interval
+for large matrices. Polling and fitting share the viewer's request server, so
+a slow source or fit can temporarily delay other requests. This first version
+supports unauthenticated HTTP/HTTPS servers and one shared viewer session.
+
+An offline demo fills simulated TH1/TH2 histograms once per second. It does not
+require ROOT, FairRoot, UCESB, or a data connection. In two terminals:
+
+```bash
+# Terminal 1, from the python-cmat directory
+python3 live_root_demo.py --port 1111
+
+# Terminal 2, from the same directory
+./pycmat --live-server http://127.0.0.1:1111 --host 127.0.0.1 --port 8080
+```
+
+Select `Histograms/Demo/h1_energy` for a 1D spectrum or
+`Histograms/Demo/h2_coincidences` for a rectangular 2D matrix. Both have synthetic
+peaks, calibrated axes, and increasing counts. Stop/restart the demo to exercise
+connection loss and recovery. This implementation has been tested against the
+simulator and documented ROOT JSON encodings; it still needs an end-to-end check
+against the user's actual c4Root instance.
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 The `pycmat` script automatically inspects the input `.cmat` headers and routes to either the 2D or 3D viewer:
 ```bash
 # Open any 2D or 3D matrix (auto-detects dimensionality)
@@ -120,7 +193,7 @@ single and multiplet fitting, background regions, integration, PDF/data export,
 and the half-life tool. TH2 opens with the 2D matrix and two projections. Use
 **Browse ROOT Histograms** in the sidebar to switch objects within the open file.
 ROOT bin contents and uniform axis spacing are preserved as calibrated energies.
-Underflow and overflow bins are excluded. ROOT TTrees, TH2Poly and TH3 objects
+Underflow and overflow bins are excluded. ROOT TTrees and TH2Poly objects
 are not supported by this viewer.
 
 #### Dedicated Viewers
@@ -290,3 +363,12 @@ This work was supported by a grant of the Romanian Ministry of Research, Innovat
 ## Disclaimer
 
 This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind.
+
+### Live ROOT TH3 cubes
+
+The existing 3D viewer now supports sparse ROOT TH3 snapshots and live polling.
+Select a TH3 from the shared menu started with `pycmat --live-server URL`,
+launch directly with `pycmat --live-th3 URL`, or read saved JSON with
+`--snapshot-th3 FILE`.
+See [TH3_QUICKSTART.md](TH3_QUICKSTART.md) for the energy–energy–time workflow,
+double gating, calibrated time fits, testing and occupancy limits.
