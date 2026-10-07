@@ -8,6 +8,7 @@
 - **[Interactive Web Viewer](Interactive-Web-Viewer)**
 - **[3D Matrix Analysis & Web Viewer](3D-Matrix-Analysis-and-Web-Viewer)**
 - **[Keyboard Shortcuts & Controls](Keyboard-Shortcuts-and-Navigation)**
+- **[ROOT Files & Live Histograms](ROOT-Files-and-Live-Histograms)**
 
 ---
 

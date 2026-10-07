@@ -4,6 +4,8 @@
 
 `python-cmat` includes dedicated subroutines and interactive analysis environments for 2D $\gamma$-$\gamma$ coincidence matrices and 3D matrix cubes (such as $\gamma$-$\gamma$-$\text{Rings}$ and $\gamma$-$\gamma$-$\Delta t$ datasets), featuring multi-plane orthogonal slicing, 3D coincidence gating, 2D Banana graphical ROIs, and Gamba & Morhác coincidence peak fitting.
 
+The viewers can also load TH1/TH2 histograms from ROOT files and stream live TH1/TH2/TH3 histograms from the ROOT `THttpServer` (including c4Root), applying the same gating and fitting tools.
+
 <p align="center">
   <img width="900" alt="python-cmat Web Viewer Interface" src="https://github.com/user-attachments/assets/460ab83c-cbfa-4ee8-9194-f57c58e5215e" />
 </p>
@@ -21,6 +23,8 @@ Explore the full documentation topics below or navigate using the sidebar:
   Dedicated guide for 3D matrix cubes, memory-mapped caching, multi-plane orthoslicing (`0-1`, `0-2`, `1-2`), 3D coincidence cuts, and 2D polygonal Banana ROIs.
 - **[Keyboard Shortcuts & Controls](Keyboard-Shortcuts-and-Navigation)**
   Complete reference for all mouse gestures, hotkeys, gate limit definitions, peak fitting shortcuts, and viewport navigation.
+- **[ROOT Files & Live Histograms](ROOT-Files-and-Live-Histograms)**
+  ROOT file input (TH1/TH2 via `uproot`), live TH1/TH2/TH3 streaming from ROOT `THttpServer` / c4Root, live TH3 plane gating with double gates and polygon cuts, and time-spectra half-life fits.
 
 ### 🔬 Analysis & Scripting
 - **[ENSDF Automated Isotope Identification](ENSDF-Isotope-Identification)**
@@ -80,6 +84,8 @@ On modern Linux environments enforcing PEP 668 (`externally-managed-environment`
 - **Gamba 3D Coincidence Slicing**: Automatically decomposes 3rd axis coincidence projections with 4-component Gamba discrete background subtraction ($P|P, P|BG, BG|P, BG|BG$) when fitting 2D coincidence peaks in 3D volumes.
 - **Arbitrary Geometry**: Handles symmetric, asymmetric, and arbitrary step sizes ($32 \times 32$, $32 \times 64$, $64 \times 128$, $128 \times 128$, etc.).
 - **Interactive Web Interface**: Ultra-responsive HTML5 Canvas architecture with pixel-matched data decimation and 2D max-pooling to preserve narrow photopeaks even when viewing the entire 4096×4096 matrix.
+- **ROOT File & Live Histogram Support**: TH1/TH2 readout from local ROOT files through `uproot`, and live TH1/TH2/TH3 streaming from ROOT `THttpServer` / c4Root — no PyROOT or local ROOT installation required, with all existing gates, fits, Banana ROIs, and PDF export working unchanged.
+- **Live TH3 Analysis**: Orthogonal-plane display of live TH3 cubes (e.g. energy–energy–time) from full immutable JSON snapshots, with double $W$ gates, polygon cuts, and half-life fitting on the time axis.
 - **Simultaneous Dual 1D Projections**: Stacked top/bottom stepped staircase histograms displaying Det 1 (X projection sliced over visible Y) and Det 2 (Y projection sliced over visible X) with synchronized crosshair tracking and calibrated energy readouts.
 - **Advanced 1D Peak Fitting**: Fits Standard Symmetric Gaussian, RadWare / SAMPO Left Exponential Tail, and Hypermet Convolved Tail + $\text{erfc}$ Compton Step models with complete statistical covariance error propagation.
 - **Multi-Gate Slicing & 2D/3D Banana ROIs**: Arbitrary 1D peak gates ($W$) and background windows ($B$) with channel width normalization, plus 2D polygonal Banana ROIs (`Shift+G` Peak / `Shift+B` Bg) for 2D area integration/subtraction and 3D coincidence projection cuts.

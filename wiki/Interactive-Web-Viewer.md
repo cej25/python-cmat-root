@@ -4,6 +4,8 @@ The `cmat_webviewer.py` server and companion `cmat_webviewer.html` client provid
 
 While the viewer functions as a high-performance visualizer for arbitrary 2D `.cmat` datasets, it features dedicated subroutines tailored for $\gamma$-$\gamma$ coincidence matrices (including multi-gate coincidence slicing with normalized background subtraction, simultaneous dual 1D projections, and 2D coincidence peak fitting). Future releases will extend support to 3D matrices and time-difference spectra.
 
+> **ROOT support:** This viewer can also display TH1/TH2 histograms from local ROOT files (`./pycmat file.root`) and stream live histograms from ROOT `THttpServer` / c4Root (`--live-server`, `--live`). See **[ROOT Files & Live Histograms](ROOT-Files-and-Live-Histograms)**.
+
 <p align="center">
   <img width="900" alt="cmat_webviewer interface" src="https://github.com/user-attachments/assets/460ab83c-cbfa-4ee8-9194-f57c58e5215e" />
 </p>
