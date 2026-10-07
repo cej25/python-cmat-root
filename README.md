@@ -44,7 +44,7 @@
 - **1D & 2D Peak Fitting**: Fits Gaussian, RadWare / SAMPO exponential tail, and Hypermet EMG profiles with complete parameter covariance. Decomposes 2D coincidence peaks with Gamba & Morhác 4-component background analysis.
 - **Automatic 2D Coincidence Peak Search**: 4-stage hybrid 2D peak search engine (`P` in 2D) combining 1D CWT projection seeding, local Gamba 4-component decomposition, false Compton scattering ridge & cross-talk filtering, and 2D non-maximum suppression (NMS) with collision-free zoom-adaptive label rendering.
 - **Fit Results File Logging**: Seamlessly appends 1D and 2D fit results to clean, fixed-width text logs (`fit_results_<timestamp>.txt`) with right-aligned formatting, accommodating 10+ digit counts and error values. Toggleable via UI button, CLI startup flag (`--fit-log`), or macro command (`fit_log`).
-- **Half-Life Fitting (`halflife.py`)**: Analytical lifetime fitting with a choice of Gaussian-convolved exponential or pure exponential decay, plus constant background. The Half-Life pop-up can pull the exact current 1D webviewer view directly from either Det 1/X or Det 2/Y, refresh it on demand, mirror reversed spectra, and expose adaptive log/linear parameter controls.
+- **Half-Life Fitting (`halflife.py`)**: Analytical lifetime fitting engine convolving a Gaussian prompt response (IRF) with a nonnegative exponential decay and constant background. The Half-Life pop-up can pull the exact current 1D webviewer view directly from either Det 1/X or Det 2/Y, refresh it on demand, mirror reversed spectra, and expose adaptive log/linear parameter controls.
 - **ENSDF Automated Isotope Identification**: 100% offline, local SQLite-indexed nuclear structure search engine (`ensdf_search.py`) querying all 300+ ENSDF mass chains. Identifies 1D photopeaks and 2D coincidence cascades using physical transition topologies (direct prompt cascades, sequential intermediate transitions, high-excitation damping) and global mass-clustering with parsimonious minimum isotope set-cover. Accessible via web pop-up with interactive server file browser (`📂 Browse...`) or command-line.
 - **Coincidence & Banana Gating**: Multi-gate peak ($W$) and background ($X$) slicing with automatic channel normalization, plus 2D polygonal Banana graphical ROIs (`Shift+G` Peak / `Shift+B` Bg) for 2D area determination and 3D coincidence projection cuts.
 - **Multi-Matrix Differential Analysis**: Instant cycling (`[` / `]`) across multiple matrices while locking zoom, gates, and auto-refitted peak parameters.
@@ -63,7 +63,6 @@ If Python 3 and pip are not yet installed on your system:
 sudo apt update && sudo apt install python3 python3-pip python3-venv
 ```
 *(Requires Python 3.8+, NumPy, SciPy, and Matplotlib).*
-ROOT histogram input additionally uses `uproot` (included in `requirements.txt`).
 
 #### Clone & Install Dependencies
 ```bash
@@ -93,79 +92,6 @@ On modern Linux distributions (e.g. Ubuntu 23.04+, Debian 12+), `pip` prevents i
 ### 2. Launch Interactive Web Viewers
 
 #### Unified Launcher (`pycmat`)
-Live ROOT / c4Root HTTP sources are also supported. Start a viewer with the
-server's histogram browser:
-
-```bash
-./pycmat --live-server http://localhost:1111 --port 8080
-```
-
-Use **Live ROOT / c4Root server → Connect** in the sidebar. A persistent
-**Live histograms** folder tree lists all discovered TH1/TH2/TH3 objects. Click a
-histogram to display it. TH3 opens the 3D viewer on the same port; its
-**Histogram browser** link returns to the shared menu. TH1/TH2 keep the tree
-open for switching to another spectrum. The page heading and tab title show
-**ROOT visualiser** for ROOT sources and **GASP visualiser** for CMAT sources.
-Search matches histogram names, folder paths, or types. The active histogram
-is highlighted. **Refresh list** discovers newly created objects and retains
-the previous list if the server cannot be reached. The server address remains
-separate from the chosen histogram and is restored when the viewer page reloads
-within the same Python session. You can also paste an individual `root.json`
-URL in the connection field. Direct startup is
-also supported:
-
-```bash
-./pycmat --live 'http://localhost:1111/Histograms/LISA_FAST/SlowToT/h1_lisafast_slowToT_1/root.json' --live-interval 2
-./pycmat --live 'http://localhost:1111/Histograms/LISA_FAST/Fast_Vs._Slow/h2_lisafast_fast_v_slow_ToT_1/root.json' --live-interval 2
-```
-
-The source URL is fetched by the **Python viewer server**. `localhost` therefore
-refers to the computer running Python, not necessarily the computer displaying
-the browser. Use the c4Root hostname or an SSH-forwarded local port when needed.
-Keep the viewer and c4Root on different ports.
-
-Live display refreshes the active histogram every selected interval while the
-viewer tab is visible. Projections and the active 1D gate are recalculated;
-zoom and gate definitions are retained. **Pause updates** freezes a snapshot
-for analysis; **Refresh now** fetches one snapshot even while paused. Resume
-restarts polling. Fits remain from their last calculation until you fit again;
-the optional **Refit peaks after updates** reruns persistent single/multiplet
-and 2D peak fits. Half-life fits and polygon integrations run on request.
-Pause for a fixed dataset when comparing fit results or exporting figures.
-
-Failed refreshes retain the last good histogram, display the connection error,
-and retry automatically. A changed binning or calibration requires an explicit
-reconnect. Histogram reset/count decreases are accepted as new snapshots.
-ROOT float bin values are retained; underflow/overflow bins are excluded from
-the displayed spectrum. Uniform binning is required. The connection is read-only:
-it does not change c4Root gates, calibration, histogram resets, or acquisition.
-Full histogram snapshots are transferred; start with a few-second interval
-for large matrices. Polling and fitting share the viewer's request server, so
-a slow source or fit can temporarily delay other requests. This first version
-supports unauthenticated HTTP/HTTPS servers and one shared viewer session.
-
-An offline demo fills simulated TH1/TH2 histograms once per second. It does not
-require ROOT, FairRoot, UCESB, or a data connection. In two terminals:
-
-```bash
-# Terminal 1, from the python-cmat directory
-python3 live_root_demo.py --port 1111
-
-# Terminal 2, from the same directory
-./pycmat --live-server http://127.0.0.1:1111 --host 127.0.0.1 --port 8080
-```
-
-Select `Histograms/Demo/h1_energy` for a 1D spectrum or
-`Histograms/Demo/h2_coincidences` for a rectangular 2D matrix. Both have synthetic
-peaks, calibrated axes, and increasing counts. Stop/restart the demo to exercise
-connection loss and recovery. This implementation has been tested against the
-simulator and documented ROOT JSON encodings; it still needs an end-to-end check
-against the user's actual c4Root instance.
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
 The `pycmat` script automatically inspects the input `.cmat` headers and routes to either the 2D or 3D viewer:
 ```bash
 # Open any 2D or 3D matrix (auto-detects dimensionality)
@@ -173,28 +99,7 @@ The `pycmat` script automatically inspects the input `.cmat` headers and routes 
 
 # Open multiple 2D matrices for differential analysis
 ./pycmat run01.cmat run02.cmat run03.cmat
-
-# Open a ROOT file and choose a TH1/TH2 histogram in the browser
-./pycmat run.root
-
-# Or open a particular ROOT TH2 directly (including one in a subdirectory)
-./pycmat 'run.root::Coincidences/h2_Ge_gg'
-
-# Open a standalone ROOT TH1 spectrum with the same 1D search, fit and export tools
-./pycmat 'run.root::Spectra/h1_Ge_E'
 ```
-
-Run `./pycmat run.root` to browse a ROOT file's TH1/TH2 objects by name and folder
-in a searchable picker. The direct `file.root::directory/histogram` syntax still
-opens a specific object immediately. In the server file browser, select a ROOT
-file or type its full path to open the same picker. With several ROOT files on
-the command line, the picker opens for each file. TH1 opens as a full-width 1D spectrum with peak search,
-single and multiplet fitting, background regions, integration, PDF/data export,
-and the half-life tool. TH2 opens with the 2D matrix and two projections. Use
-**Browse ROOT Histograms** in the sidebar to switch objects within the open file.
-ROOT bin contents and uniform axis spacing are preserved as calibrated energies.
-Underflow and overflow bins are excluded. ROOT TTrees and TH2Poly objects
-are not supported by this viewer.
 
 #### Dedicated Viewers
 You can also launch the dedicated viewers directly:
@@ -259,16 +164,9 @@ python3 halflife.py -i spectrum.dat
 # Automated fit with initial guesses and export to ASCII .fit and vector PDF:
 python3 halflife.py spectrum.dat --t12 20.0 --fwhm 15.0 --range 450 750 --out fit.fit --pdf fit.pdf
 
-# Pure exponential with a fixed onset at 450:
-python3 halflife.py spectrum.dat --model exponential --centroid 450 --fix-centroid --range 450 750 --out decay.fit
-
 # Background chi-square profile exploration scan:
 python3 halflife.py spectrum.dat --scan-bg 0.0 40.0 50
 ```
-
-In the Half-Life popup, choose **Exponential decay** under **Fit model**. The centroid marks the decay onset; it starts at the fit range minimum and is fixed, but can be adjusted or freed. FWHM is unused for this model. The headless `halflife` command also accepts `--model exponential`.
-
-When a histogram has a calibrated X axis (including a ROOT time axis), the popup fits those physical X coordinates by default. The **X-Axis Coordinate** selector can switch back to channels. The displayed half-life, FWHM, fit range, saved `.fit` data, and exported PDF use the selected coordinate; ROOT time units are read from the histogram axis title when present. If the ROOT axis has no unit, enter one in the popup's X unit field; this labels the existing values without rescaling them. For a headless fit from a ROOT histogram, the `halflife` command likewise uses ROOT axis coordinates by default; `--channel` explicitly selects channels.
 
 ### 6. Python Library API (`cmat.py` & `cmat3d.py`)
 
@@ -348,6 +246,64 @@ For in-depth guides, mathematical formulations, configuration details, and file 
 
 ---
 
+## Additional Support: ROOT Histograms
+
+The CMAT readers, converters, and analysis tools described above remain the core of `python-cmat`. The web viewers also support histograms from ROOT files and live ROOT HTTP servers, including c4Root's `THttpServer`.
+
+### ROOT Files
+
+Open a ROOT file and choose a TH1 or TH2 histogram from the searchable histogram browser:
+
+```bash
+./pycmat your_file.root --host 127.0.0.1 --port 8080
+```
+
+Alternatively, select a histogram directly, including its directory path:
+
+```bash
+./pycmat 'your_file.root::folder/histogram_name' --host 127.0.0.1 --port 8080
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). ROOT file input uses `uproot`, included in `requirements.txt`. The current file reader supports TH1 and TH2; live TH3 support is described below.
+
+### Live ROOT / c4Root Histograms
+
+With the ROOT HTTP server running, start the viewer:
+
+```bash
+./pycmat --live-server http://127.0.0.1:1111 --host 127.0.0.1 --port 8080
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080), then use the **Live histograms** folder tree and search box to select a TH1, TH2, or TH3. Selecting a TH3 opens the 3D viewer on the same port; its **Histogram browser** link returns to the shared menu.
+
+Here, port `1111` belongs to the ROOT server and port `8080` to the viewer. `127.0.0.1` refers to the computer running the Python viewer. If c4Root runs on another computer, replace the source address with that computer's hostname or IP address.
+
+Histograms refresh as data accumulate, with gates and projections recalculated while preserving gate definitions and zoom. Use **Pause updates** to analyse a fixed snapshot, **Refresh now** for a manual update, and resume updates when ready. If a request fails, the viewer retains the last good snapshot and retries.
+
+### Live TH3 Gating and Time Spectra
+
+The existing 3D interface can display any of the three orthogonal planes of a live TH3. For an energy–energy–time cube:
+
+1. Select plane **0-1** to display Energy 1 versus Energy 2.
+2. Apply separate **W** gates on the two energy spectra, or draw a **2D banana polygon** on the displayed matrix with **Shift+G**.
+3. Analyse the resulting spectrum along the third axis, including lifetime fitting when that axis represents time.
+
+**Shift+B** draws a background polygon. Applied peak polygons have solid yellow borders; background polygons have dashed pink borders. Axis calibration and units are taken from the ROOT histogram.
+
+Compact sparse TH3 data can be projected without expanding the entire cube. Memory use and refresh time still increase with histogram occupancy and transfer size.
+
+### Help and Further Examples
+
+```bash
+./pycmat --help
+```
+
+If the launcher is not executable, use `python3 pycmat` with the same arguments.
+
+See [LIVE_QUICKSTART.md](LIVE_QUICKSTART.md) for live connections and the offline demo, and [TH3_QUICKSTART.md](TH3_QUICKSTART.md) for TH3 gating and time fitting. The page heading and browser tab show **ROOT visualiser** for ROOT inputs and **GASP visualiser** for CMAT inputs.
+
+---
+
 ## License
 
 MIT License. Developed for the gamma-ray spectroscopy community.
@@ -362,13 +318,6 @@ This work was supported by a grant of the Romanian Ministry of Research, Innovat
 
 ## Disclaimer
 
-This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind.
+This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind. 
 
-### Live ROOT TH3 cubes
-
-The existing 3D viewer now supports sparse ROOT TH3 snapshots and live polling.
-Select a TH3 from the shared menu started with `pycmat --live-server URL`,
-launch directly with `pycmat --live-th3 URL`, or read saved JSON with
-`--snapshot-th3 FILE`.
-See [TH3_QUICKSTART.md](TH3_QUICKSTART.md) for the energy–energy–time workflow,
-double gating, calibrated time fits, testing and occupancy limits.
+Further development, including ROOT file support and live ROOT histogram viewing, was carried out with the assistance of **ChatGPT**, developed by OpenAI.
