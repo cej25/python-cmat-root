@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://img.shields.io/badge/docs-GitHub_Wiki-blueviolet.svg)](https://github.com/rlica/python-cmat/wiki)
 [![GASPware Compatible](https://img.shields.io/badge/GASPware-Compatible-green.svg)](https://github.com/csteke/GASPware)
+[![ROOT Histograms Supported](https://img.shields.io/badge/ROOT-Histograms_Supported-orange.svg)](https://root.cern)
 
 **Python reader, decompressor, ASCII converter, and interactive Web visualizer for [GASPware](https://github.com/csteke/GASPware) 2D and 3D matrices in the `.cmat` format, with ROOT file and live ROOT histogram support.**
 
