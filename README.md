@@ -245,6 +245,64 @@ For in-depth guides, mathematical formulations, configuration details, and file 
 
 ---
 
+## Additional Support: ROOT Histograms
+
+The CMAT readers, converters, and analysis tools described above remain the core of `python-cmat`. The web viewers also support histograms from ROOT files and live ROOT HTTP servers, including c4Root's `THttpServer`.
+
+### ROOT Files
+
+Open a ROOT file and choose a TH1 or TH2 histogram from the searchable histogram browser:
+
+```bash
+./pycmat your_file.root --host 127.0.0.1 --port 8080
+```
+
+Alternatively, select a histogram directly, including its directory path:
+
+```bash
+./pycmat 'your_file.root::folder/histogram_name' --host 127.0.0.1 --port 8080
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). ROOT file input uses `uproot`, included in `requirements.txt`. The current file reader supports TH1 and TH2; live TH3 support is described below.
+
+### Live ROOT / c4Root Histograms
+
+With the ROOT HTTP server running, start the viewer:
+
+```bash
+./pycmat --live-server http://127.0.0.1:1111 --host 127.0.0.1 --port 8080
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080), then use the **Live histograms** folder tree and search box to select a TH1, TH2, or TH3. Selecting a TH3 opens the 3D viewer on the same port; its **Histogram browser** link returns to the shared menu.
+
+Here, port `1111` belongs to the ROOT server and port `8080` to the viewer. `127.0.0.1` refers to the computer running the Python viewer. If c4Root runs on another computer, replace the source address with that computer's hostname or IP address.
+
+Histograms refresh as data accumulate, with gates and projections recalculated while preserving gate definitions and zoom. Use **Pause updates** to analyse a fixed snapshot, **Refresh now** for a manual update, and resume updates when ready. If a request fails, the viewer retains the last good snapshot and retries.
+
+### Live TH3 Gating and Time Spectra
+
+The existing 3D interface can display any of the three orthogonal planes of a live TH3. For an energy–energy–time cube:
+
+1. Select plane **0-1** to display Energy 1 versus Energy 2.
+2. Apply separate **W** gates on the two energy spectra, or draw a **2D banana polygon** on the displayed matrix with **Shift+G**.
+3. Analyse the resulting spectrum along the third axis, including lifetime fitting when that axis represents time.
+
+**Shift+B** draws a background polygon. Applied peak polygons have solid yellow borders; background polygons have dashed pink borders. Axis calibration and units are taken from the ROOT histogram.
+
+Compact sparse TH3 data can be projected without expanding the entire cube. Memory use and refresh time still increase with histogram occupancy and transfer size.
+
+### Help and Further Examples
+
+```bash
+./pycmat --help
+```
+
+If the launcher is not executable, use `python3 pycmat` with the same arguments.
+
+See [LIVE_QUICKSTART.md](LIVE_QUICKSTART.md) for live connections and the offline demo, and [TH3_QUICKSTART.md](TH3_QUICKSTART.md) for TH3 gating and time fitting. The page heading and browser tab show **ROOT visualiser** for ROOT inputs and **GASP visualiser** for CMAT inputs.
+
+---
+
 ## License
 
 MIT License. Developed for the gamma-ray spectroscopy community.
@@ -259,5 +317,6 @@ This work was supported by a grant of the Romanian Ministry of Research, Innovat
 
 ## Disclaimer
 
-This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind.
+This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind. 
 
+Further development, including ROOT file support and live ROOT histogram viewing, was carried out with the assistance of **ChatGPT**, developed by OpenAI.

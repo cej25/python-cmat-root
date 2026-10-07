@@ -325,9 +325,13 @@ def get_html_content() -> str:
     return HTML_FILE_PATH.read_text(encoding="utf-8")
 
 
+from root_cube import ROOTCubeReader
+
+
 class MatrixSession3D:
     def __init__(self, config: dict):
         self.config = config
+        self.snapshot_lock = threading.RLock()
         self.matrices: List[dict] = []
         self.active_index: int = 0
         self.active_plane: str = config.get("default_plane", "0-1")
@@ -397,6 +401,45 @@ class MatrixSession3D:
         self.matrices.append(entry)
         return len(self.matrices) - 1
 
+    def add_root_cube(self, source, interval=5.0):
+        if not np.isfinite(interval) or not 1 <= interval <= 300:
+            raise ValueError("TH3 refresh interval must be between 1 and 300 seconds")
+        reader = ROOTCubeReader(source)
+        entry = {"index": len(self.matrices), "name": reader.object_name,
+                 "filename": reader.object_name, "path": str(source), "reader": reader,
+                 "shape": list(reader.shape), "step": list(reader.step),
+                 "total_counts": reader._total_counts, "max_count": reader._max_count,
+                 "nonzero_voxels": reader._nonzero_voxels, "cal": reader.cal.copy(),
+                 "live": {"enabled": reader.is_live, "paused": False,
+                          "interval": max(1.0, float(interval)), "generation": 0,
+                          "error": None, "updated_at": time.time()}}
+        for index, previous in enumerate(self.matrices):
+            if previous["path"] == str(source):
+                entry["index"] = index
+                self.matrices[index] = entry
+                self.active_index = index
+                return index
+        self.matrices.append(entry)
+        self.active_index = len(self.matrices) - 1
+        return self.active_index
+
+    def refresh_root_cube(self, force=False):
+        with self.snapshot_lock:
+            m = self.get_active_matrix()
+            live = m.get("live") if m else None
+            if not live or not live["enabled"] or (live["paused"] and not force):
+                return
+            try:
+                reader = ROOTCubeReader(m["path"])
+                old = m["reader"]
+                if reader.shape != old.shape or reader.axis_edges != old.axis_edges or reader.axis_labels != old.axis_labels:
+                    raise ValueError("TH3 axes changed; restart the 3D viewer to reconnect")
+                m.update(reader=reader, total_counts=reader._total_counts,
+                         max_count=reader._max_count, nonzero_voxels=reader._nonzero_voxels)
+                live.update(error=None, generation=live["generation"]+1, updated_at=time.time())
+            except Exception as exc:
+                live["error"] = str(exc)
+
     def get_active_matrix(self) -> Optional[dict]:
         if self.matrices and 0 <= self.active_index < len(self.matrices):
             return self.matrices[self.active_index]
@@ -419,6 +462,16 @@ class MatrixSession3D:
                 self.active_index = idx
                 return idx
         raise KeyError(f"Matrix '{identifier}' not found in loaded matrices.")
+
+    def get_1d_spectrum(self, axis=0):
+        m = self.get_active_matrix()
+        if not m:
+            return None
+        specs = {ax: gates for ax, gates in self.gates_1d.items()
+                 if ax != axis and (gates["w"] or gates["b"])}
+        if specs:
+            return np.asarray(compute_3d_gate(m["reader"], axis, specs)["net_spec"], dtype=np.float64)
+        return m["reader"].get_projection(axis)
 
     def set_active_plane(self, plane: str) -> str:
         p = str(plane).strip()
@@ -461,7 +514,8 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                 pass
             return
         try:
-            super().handle()
+            with self.get_session().snapshot_lock:
+                super().handle()
         except self.client_disconnect_errors:
             # Browsers cancel fetch() requests during fast navigation. The
             # server may still be finishing the calculation when the TCP
@@ -492,7 +546,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
         # 0-1: X=Axis 0 (Axis 1), Y=Axis 1 (Axis 2), 3rd=Axis 2 (Axis 3)
         # 0-2: X=Axis 0 (Axis 1), Y=Axis 2 (Axis 3), 3rd=Axis 1 (Axis 2)
         # 1-2: X=Axis 1 (Axis 2), Y=Axis 2 (Axis 3), 3rd=Axis 0 (Axis 1)
-        axis_names = ["Axis 1 (X)", "Axis 2 (Y)", "Axis 3 (Z)"]
+        axis_names = [getattr(reader, "axis_labels", {}).get(ax, "Axis %d (%s)" % (ax+1, "XYZ"[ax])) for ax in range(3)]
         if plane == "0-1":
             ax_x, ax_y, ax_3rd = 0, 1, 2
             dim_x, dim_y = reader.res1, reader.res2
@@ -510,6 +564,11 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             "filename": m["filename"],
             "path": m["path"],
             "ndim": 3,
+            "root_cube": isinstance(reader, ROOTCubeReader),
+            "mounted_browser": bool(getattr(self, "api_prefix", "")),
+            "axis_labels": getattr(reader, "axis_labels", {}),
+            "axis_units": getattr(reader, "axis_units", {}),
+            "live": m.get("live"),
             "shape": [reader.res1, reader.res2, reader.res3],
             "step": [reader.step1, reader.step2, reader.step3],
             "blocks": [reader.ndiv1, reader.ndiv2, reader.ndiv3],
@@ -539,6 +598,22 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             ],
         }
 
+    def html_bytes(self, content):
+        prefix = getattr(self, "api_prefix", "")
+        if prefix:
+            script = """<script>
+(() => {
+  const prefix = %s;
+  const mountedURL = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !value.startsWith(prefix + '/') ? prefix + value : value;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (url, options) => originalFetch(mountedURL(url), options);
+  const originalOpen = window.open.bind(window);
+  window.open = (url, ...args) => originalOpen(mountedURL(url), ...args);
+})();
+</script>""" % json.dumps(prefix)
+            content = content.replace("<head>", "<head>" + script, 1)
+        return content.encode("utf-8")
+
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
 
@@ -549,13 +624,13 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
         session = self.get_session()
         m = session.get_active_matrix() if session else None
         reader: Optional[CMAT3DReader] = m["reader"] if m else None
-        axis_names = ["Axis 1 (X)", "Axis 2 (Y)", "Axis 3 (Z)"]
+        axis_names = [getattr(reader, "axis_labels", {}).get(ax, "Axis %d (%s)" % (ax+1, "XYZ"[ax])) for ax in range(3)]
 
         if path == "/" or path.startswith("/index"):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(get_html_content().encode("utf-8"))
+            self.wfile.write(self.html_bytes(get_html_content()))
 
         elif path == "/api/quit":
             self.send_response(200)
@@ -566,6 +641,18 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             threading.Timer(0.15, lambda: os._exit(0)).start()
 
         elif path == "/api/metadata":
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(self.get_metadata_dict()).encode("utf-8"))
+
+        elif path in ("/api/live_refresh", "/api/live_control"):
+            live = m.get("live") if m else None
+            if live:
+                if path == "/api/live_control":
+                    live["paused"] = query.get("paused", ["0"])[0] == "1"
+                else:
+                    session.refresh_root_cube(force=query.get("force", ["0"])[0] == "1")
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
@@ -622,9 +709,10 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             sub = reader.get_2d_plane(plane=plane, gate_3rd=gate_3rd, x0=x0, x1=x1, y0=y0, y1=y1)
             sh_y, sh_x = sub.shape
 
+            tile_dtype = np.float64 if isinstance(reader, ROOTCubeReader) else np.int32
             # 2D max pooling downsampling
             if sh_x <= target_w and sh_y <= target_h:
-                out = np.ascontiguousarray(sub, dtype=np.int32)
+                out = np.ascontiguousarray(sub, dtype=tile_dtype)
             else:
                 step_x = max(1, int(np.ceil(sh_x / target_w)))
                 step_y = max(1, int(np.ceil(sh_y / target_h)))
@@ -639,12 +727,13 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                 new_h = sub_padded.shape[0] // step_y
                 new_w = sub_padded.shape[1] // step_x
                 out = sub_padded.reshape(new_h, step_y, new_w, step_x).max(axis=(1, 3))
-                out = np.ascontiguousarray(out[:target_h, :target_w], dtype=np.int32)
+                out = np.ascontiguousarray(out[:target_h, :target_w], dtype=tile_dtype)
 
             actual_h, actual_w = out.shape
             self.send_response(200)
             self.send_header("Content-type", "application/octet-stream")
             self.send_header("Access-Control-Expose-Headers", "X-Shape-W, X-Shape-H, X-Slice-X0, X-Slice-X1, X-Slice-Y0, X-Slice-Y1")
+            self.send_header("X-Data-Type", "float64" if tile_dtype == np.float64 else "int32")
             self.send_header("X-Shape-W", str(actual_w))
             self.send_header("X-Shape-H", str(actual_h))
             self.send_header("X-Slice-X0", str(x0))
@@ -773,7 +862,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                     if w_g or b_g:
                         gate_specs[ax] = {"w": w_g, "b": b_g}
 
-            axis_names = ["Axis 1 (X)", "Axis 2 (Y)", "Axis 3 (Z)"]
+            axis_names = [getattr(reader, "axis_labels", {}).get(ax, "Axis %d (%s)" % (ax+1, "XYZ"[ax])) for ax in range(3)]
             if gate_specs:
                 gate_res = compute_3d_gate(reader, axis, gate_specs)
                 spec = np.array(gate_res["net_spec"], dtype=np.float64)
@@ -1110,7 +1199,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             spec = spec0 if axis == 0 else (spec1 if axis == 1 else spec2)
             spec = np.array(spec, dtype=np.float64)
 
-            axis_names = ["Axis 1 (X)", "Axis 2 (Y)", "Axis 3 (Z)"]
+            axis_names = [getattr(reader, "axis_labels", {}).get(ax, "Axis %d (%s)" % (ax+1, "XYZ"[ax])) for ax in range(3)]
             det_name = axis_names[axis]
             axis_cal = session.get_cal(axis)
 
@@ -1120,7 +1209,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                 len(spec) - 1,
                 is_log=is_log,
                 cal=axis_cal,
-                axis_label=f"{det_name} Energy (keV)" if session.is_calibrated(axis) else f"{det_name} Channel",
+                axis_label=det_name if isinstance(reader, ROOTCubeReader) else (f"{det_name} Energy (keV)" if session.is_calibrated(axis) else f"{det_name} Channel"),
                 title=f"{m['filename']} - {det_name} Projection",
             )
             self.send_response(200)
@@ -1156,7 +1245,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             y1 = max(y0 + 1, min(max_h, int(float(query.get("y1", [max_h])[0]))))
 
             mat_2d = reader.get_2d_plane(plane=plane, gate_3rd=session.gate_3rd)
-            axis_names = ["Axis 1 (X)", "Axis 2 (Y)", "Axis 3 (Z)"]
+            axis_names = [getattr(reader, "axis_labels", {}).get(ax, "Axis %d (%s)" % (ax+1, "XYZ"[ax])) for ax in range(3)]
 
             pdf_bytes = generate_pdf_2d(
                 mat_2d,
@@ -1170,8 +1259,8 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                 vmax=vmax,
                 cal_x=session.get_cal(ax_x),
                 cal_y=session.get_cal(ax_y),
-                x_label=f"{axis_names[ax_x]} (keV)" if session.is_calibrated(ax_x) else f"{axis_names[ax_x]} (Channel)",
-                y_label=f"{axis_names[ax_y]} (keV)" if session.is_calibrated(ax_y) else f"{axis_names[ax_y]} (Channel)",
+                x_label=axis_names[ax_x] if isinstance(reader, ROOTCubeReader) else (f"{axis_names[ax_x]} (keV)" if session.is_calibrated(ax_x) else f"{axis_names[ax_x]} (Channel)"),
+                y_label=axis_names[ax_y] if isinstance(reader, ROOTCubeReader) else (f"{axis_names[ax_y]} (keV)" if session.is_calibrated(ax_y) else f"{axis_names[ax_y]} (Channel)"),
                 title=f"{m['filename']} - 2D Plane {plane}",
             )
             self.send_response(200)
@@ -1286,7 +1375,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(content.encode("utf-8"))
+            self.wfile.write(self.html_bytes(content))
 
         elif path.startswith("/api/ensdf/status"):
             from ensdf_search import ENSDFSearchEngine
@@ -1410,7 +1499,7 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(content.encode("utf-8"))
+            self.wfile.write(self.html_bytes(content))
 
         elif path.startswith("/api/halflife/files"):
             import datetime
@@ -1500,7 +1589,11 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             x_arr = np.arange(len(spec), dtype=np.float64)
             x_energy = np.array([cal[0] + cal[1]*ch + (cal[2]*(ch**2) if len(cal)>2 else 0) for ch in x_arr], dtype=np.float64) if (cal[1] != 1.0 or cal[0] != 0.0) else None
 
+            if isinstance(reader, ROOTCubeReader):
+                x_energy = cal[0] + cal[1] * (x_arr + 0.5)
             resp = {
+                "x_axis_label": getattr(reader, "axis_labels", {}).get(axis, "Energy (keV)"),
+                "x_unit": getattr(reader, "axis_units", {}).get(axis, "keV"),
                 "success": True,
                 "filename": f"{mname}_Axis{axis+1}.dat",
                 "x": x_arr.tolist(),
@@ -1591,6 +1684,11 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self):
+        # Reuse the physical-axis-aware half-life API for both viewers.
+        if self.path in ("/api/halflife/fit", "/api/halflife/scan_bg",
+                         "/api/halflife/compress", "/api/halflife/export_pdf"):
+            from cmat_webviewer import CMATWebHandler
+            return CMATWebHandler.do_POST(self)
         session = self.get_session()
         m = session.get_active_matrix()
 
@@ -1854,6 +1952,9 @@ def main():
         help="Do not automatically open web browser",
     )
 
+    parser.add_argument("--live-th3", help="Live ROOT TH3 URL (root.json or root.json.gz)")
+    parser.add_argument("--snapshot-th3", help="Saved ROOT TH3 JSON or JSON.gz snapshot")
+    parser.add_argument("--live-interval", type=float, default=5.0, help="TH3 refresh interval in seconds")
     args = parser.parse_args()
 
     session = MatrixSession3D(config)
@@ -1880,6 +1981,12 @@ def main():
     if args.plane:
         session.set_active_plane(args.plane)
 
+    if args.live_th3 or args.snapshot_th3:
+        try:
+            session.add_root_cube(args.live_th3 or args.snapshot_th3, args.live_interval)
+        except Exception as exc:
+            parser.error(str(exc))
+
     # Load input files
     input_files = []
     for item in args.input:
@@ -1889,7 +1996,7 @@ def main():
         else:
             input_files.append(item)
 
-    if not input_files:
+    if not input_files and not session.matrices:
         # Check if default GeE-Rings3D.cmat exists in cwd
         default_3d = Path.cwd() / "GeE-Rings3D.cmat"
         if default_3d.exists():

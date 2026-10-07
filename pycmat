@@ -59,6 +59,15 @@ def main():
     script_2d = script_dir / "cmat_webviewer.py"
     script_3d = script_dir / "cmat3d_webviewer.py"
 
+    if any(arg in ("--live-th3", "--snapshot-th3") or arg.startswith(("--live-th3=", "--snapshot-th3=")) for arg in sys.argv[1:]):
+        os.execv(sys.executable, [sys.executable, str(script_3d)] + sys.argv[1:])
+
+    # ROOT TH1/TH2 input is handled by the 1D/2D viewer. A histogram can be selected
+    # with file.root::directory/histogram.
+    if any(arg in ("--live", "--live-server") or arg.startswith(("--live=", "--live-server=")) for arg in sys.argv[1:]) or any(".root" in arg.lower() for arg in sys.argv[1:] if not arg.startswith("-")):
+        args = [sys.executable, str(script_2d)] + sys.argv[1:]
+        os.execv(sys.executable, args)
+
     # Search sys.argv for .cmat files
     target_ndim = None
     first_cmat_file = None

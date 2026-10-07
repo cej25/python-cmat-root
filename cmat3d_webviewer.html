@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>GASPware 3D Matrix Web Viewer</title>
+<title>GASP visualiser — 3D</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -685,7 +685,8 @@
 <header>
   <div class="title">
     <button id="btnToggleSidebar" class="btn-sidebar-toggle" title="Toggle Sidebar Menu [M]">Menu</button>
-    <span>GASPware 3D</span>
+    <span id="viewerBrand">GASP visualiser</span>
+    <a id="backToHistogramBrowser" href="/" style="display:none;color:#90caf9;font-size:13px">Histogram browser</a>
     <span class="badge badge-3d">3D Matrix</span>
   </div>
 
@@ -727,6 +728,17 @@
     <div class="control-group">
       <h3>Active Matrix</h3>
       <div class="matrix-info-box" id="matrixInfoBox">Loading matrix...</div>
+    </div>
+
+    <div class="control-group" id="liveCubeControls" style="display:none">
+      <h3>Live ROOT TH3</h3>
+      <div id="liveCubeStatus" style="overflow-wrap:anywhere">Connecting...</div>
+      <label>Refresh interval
+        <select id="liveCubeInterval"><option value="2">2 s</option><option value="5" selected>5 s</option><option value="10">10 s</option><option value="30">30 s</option></select>
+      </label>
+      <button id="liveCubePause" onclick="toggleCubeLive()">Pause updates</button>
+      <button class="secondary" onclick="refreshCubeLive(true)">Refresh now</button>
+      <div style="font-size:11px;margin-top:5px">Gates update with the stream. Fits are snapshots; pause updates while analysing.</div>
     </div>
 
     <!-- 2. Display & Colors -->
@@ -1346,6 +1358,13 @@
     return { x: 0, y: 1, z: 2, nameX: 'Axis 1 (X)', nameY: 'Axis 2 (Y)', nameZ: 'Axis 3 (Z)' };
   }
 
+  function axisCoordinateLabel(axis) {
+    return metadata?.axis_labels?.[axis] || (isAxisCalibrated(axis) ? `Axis ${axis+1} Energy (keV)` : `Axis ${axis+1} Channel`);
+  }
+  function axisCoordinateUnit(axis) {
+    return metadata?.axis_units?.[axis] === 'axis units' ? 'axis units' : (metadata?.axis_units?.[axis] || 'keV');
+  }
+
   function getCalForAxis(axis) {
     if (metadata && metadata[`cal_${axis}`]) return metadata[`cal_${axis}`];
     return [0.0, 1.0, 0.0];
@@ -1353,7 +1372,8 @@
 
   function chToEnergy(axis, ch) {
     const c = getCalForAxis(axis);
-    return c[0] + c[1] * ch + c[2] * ch * ch;
+    const coordinate = ch + (metadata?.root_cube ? 0.5 : 0);
+    return c[0] + c[1] * coordinate + c[2] * coordinate * coordinate;
   }
 
   function isAxisCalibrated(axis) {
@@ -1579,7 +1599,15 @@
     }
   }
 
+  function updateViewerBrand() {
+    const brand = metadata?.root_cube ? 'ROOT visualiser' : 'GASP visualiser';
+    document.getElementById('viewerBrand').textContent = brand;
+    document.title = `${brand} — 3D`;
+    document.getElementById('backToHistogramBrowser').style.display = metadata?.mounted_browser ? '' : 'none';
+  }
+
   function updateUIWithMetadata() {
+    updateViewerBrand();
     if (!metadata) return;
 
     activePlane = metadata.active_plane || '0-1';
@@ -1588,6 +1616,10 @@
     else if (activePlane === '0-2') document.getElementById('btnPlane02')?.classList.add('active');
     else if (activePlane === '1-2') document.getElementById('btnPlane12')?.classList.add('active');
 
+    for (let ax = 0; ax < 3; ax++) {
+      const title = document.querySelector(`#panel1DTitle${ax}`);
+      if (title && metadata.axis_labels?.[ax]) title.textContent = metadata.axis_labels[ax];
+    }
     const shape = metadata.shape || [4096, 4096, 128];
     const plAxes = getPlaneAxes(activePlane);
     view2D.x0 = 0; view2D.x1 = shape[plAxes.x];
@@ -1757,7 +1789,7 @@
       const buf = await res.arrayBuffer();
       if (requestGeneration !== tileRequestGeneration) return;
 
-      currentTileData = new Int32Array(buf);
+      currentTileData = res.headers.get('X-Data-Type') === 'float64' ? new Float64Array(buf) : new Int32Array(buf);
       if (tileW > 0 && currentTileData.length % tileW === 0 && currentTileData.length !== tileW * tileH) {
         tileH = Math.round(currentTileData.length / tileW);
       }
@@ -1801,7 +1833,7 @@
       sumSpec1D[1] = data.spec1;
       sumSpec1D[2] = data.spec2;
 
-      recomputeGates(false);
+      await recomputeGates(false);
     } catch (e) {
       if (e.name === 'AbortError') return;
       console.error("fetchProjections failed:", e);
@@ -1945,7 +1977,7 @@
     const curCh = cursorChannel1D[axis];
     if (curCh === null) return;
 
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
 
     if (type === 'w') {
       if (gates1D[axis].pending_w === null) {
@@ -2026,7 +2058,7 @@
   }
 
   function updateGateUI() {
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
     for (let ax = 0; ax < 3; ax++) {
       const btn = document.getElementById(`btnClearGate${ax}`);
       const titleEl = document.getElementById(`panel1DTitle${ax}`);
@@ -2051,7 +2083,7 @@
           const g3 = gambaGateResult;
           const ex = g3.centroid_x_e !== undefined && g3.centroid_x_e !== null ? `${Number(g3.centroid_x_e).toFixed(1)} keV` : `ch ${g3.centroid_x_ch}`;
           const ey = g3.centroid_y_e !== undefined && g3.centroid_y_e !== null ? `${Number(g3.centroid_y_e).toFixed(1)} keV` : `ch ${g3.centroid_y_ch}`;
-          titleEl.innerHTML = `${axNames[ax]} <span style="background:rgba(0,230,118,0.18); border:1px solid #00e676; border-radius:3px; padding:1px 5px; font-size:0.7rem; color:#00e676; font-weight:bold;">[Gamba Cut: ${ex} × ${ey} | Net: ${Math.round(g3.net_counts).toLocaleString()} cts]</span>`;
+          titleEl.innerHTML = `${axNames[ax].replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))} <span style="background:rgba(0,230,118,0.18); border:1px solid #00e676; border-radius:3px; padding:1px 5px; font-size:0.7rem; color:#00e676; font-weight:bold;">[Gamba Cut: ${ex} × ${ey} | Net: ${Math.round(g3.net_counts).toLocaleString()} cts]</span>`;
         } else {
           titleEl.innerText = axNames[ax];
         }
@@ -2193,7 +2225,8 @@
         } else {
           showMatrixToast(`Peak Banana: ${data.total_gated_counts.toLocaleString()} cts on ${plAxes.nameZ}`);
         }
-        recomputeGates();
+        await recomputeGates();
+        render2D();
       } else {
         showMatrixToast(data.error || "Banana gating failed", true);
       }
@@ -2280,12 +2313,12 @@
     const spec = spec1D[axis];
     const chInt = Math.round(ch);
     const energy = isCal ? chToEnergy(axis, ch) : ch;
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
 
     const existingIdx = (foundPeaks1D[axis] || []).findIndex(p => Math.abs(p.channel - ch) < 1.5);
     if (existingIdx >= 0) {
       const removed = foundPeaks1D[axis].splice(existingIdx, 1)[0];
-      const rLbl = isCal ? `${(removed.energy !== undefined ? removed.energy : chToEnergy(axis, removed.channel)).toFixed(1)} keV` : `ch ${removed.channel}`;
+      const rLbl = isCal ? `${(removed.energy !== undefined ? removed.energy : chToEnergy(axis, removed.channel)).toFixed(1)} ${axisCoordinateUnit(axis)}` : `ch ${removed.channel}`;
       const hud = document.getElementById('hudCoords');
       if (hud) hud.innerText = `Removed peak marker at ${rLbl} on ${axNames[axis]} (${foundPeaks1D[axis].length} remaining)`;
       showMatrixToast(`Removed peak marker at ${rLbl}`);
@@ -2299,7 +2332,7 @@
       if (!foundPeaks1D[axis]) foundPeaks1D[axis] = [];
       foundPeaks1D[axis].push(newMarker);
       foundPeaks1D[axis].sort((a, b) => a.channel - b.channel);
-      const pLbl = isCal ? `${energy.toFixed(1)} keV` : `ch ${ch}`;
+      const pLbl = isCal ? `${energy.toFixed(1)} ${axisCoordinateUnit(axis)}` : `ch ${ch}`;
       const hud = document.getElementById('hudCoords');
       if (hud) hud.innerText = `Added peak marker at ${pLbl} on ${axNames[axis]} (Total: ${foundPeaks1D[axis].length} peaks | Press 'V' to fit)`;
       showMatrixToast(`Added peak marker at ${pLbl}`);
@@ -2319,7 +2352,7 @@
     const fitType = document.getElementById('fitTypeSelect')?.value || 'gaussian';
     const fwhmEst = parseFloat(document.getElementById('peakSearchFwhmSlider')?.value || '4.0');
     const fwhmMult = document.getElementById('fwhmMultSlider1D') ? parseFloat(document.getElementById('fwhmMultSlider1D').value) : 4.0;
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
     const detLabel = axNames[axis] || `Axis ${axis + 1}`;
     const gate3rd = get3rdAxisGateParam();
     const fitGate3rd = axis === plAxes.z ? '' : gate3rd;
@@ -2509,7 +2542,7 @@
         displayFitCard1D(data, axis);
         render1DSpectrum(axis);
         const isCal = isAxisCalibrated(axis);
-        const enStr = isCal ? ` (${data.centroid_e} keV)` : '';
+        const enStr = isCal ? ` (${data.centroid_e} ${axisCoordinateUnit(axis)})` : '';
         showMatrixToast(`Fitted Peak: Centroid=${data.centroid_ch?.toFixed(2)}${enStr}, Area=${Math.round(data.area || 0)}`);
       } else {
         showMatrixToast(data.error || "Fit failed", true);
@@ -2790,6 +2823,55 @@
   }
 
   // --- Canvas Rendering: 2D Matrix Heatmap ---
+  // Gate outlines are rendered last, above heatmaps, bands and fitted peaks.
+  function drawBananaGateOverlays(ctx, pr) {
+    const draw = (poly, isBg, isDrawing) => {
+      if (!poly || poly.length === 0) return;
+      const points = poly.map(p => chToPx2D(p.x, p.y));
+      if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+      const xs = points.map(p => p.x), ys = points.map(p => p.y);
+      if (Math.max(...xs) < pr.x || Math.min(...xs) > pr.x + pr.w ||
+          Math.max(...ys) < pr.y || Math.min(...ys) > pr.y + pr.h) return;
+      const color = isBg ? '#ff4081' : '#ffe600';
+      const closed = !isDrawing && points.length >= 3;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(pr.x, pr.y, pr.w, pr.h); ctx.clip();
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
+      for (const point of points.slice(1)) ctx.lineTo(point.x, point.y);
+      if (closed) {
+        ctx.closePath();
+        ctx.fillStyle = isBg ? 'rgba(255,64,129,0.07)' : 'rgba(255,230,0,0.07)';
+        ctx.fill();
+      }
+      // Dark and white under-strokes keep borders visible on every colormap.
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 7; ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.stroke();
+      ctx.setLineDash(isBg ? [8, 5] : []);
+      ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+      ctx.setLineDash([]);
+      for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        ctx.beginPath(); ctx.arc(point.x, point.y, isDrawing ? 4.5 : 3, 0, 2 * Math.PI);
+        ctx.fillStyle = i === 0 && isDrawing ? '#00e676' : color; ctx.fill();
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+      const label = `${isBg ? 'Background gate' : 'Peak gate'}${isDrawing ? ' (drawing)' : bananaGateActive ? ' (applied)' : ''}`;
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      const width = ctx.measureText(label).width + 14;
+      const x = Math.max(pr.x + 4, Math.min(pr.x + pr.w - width - 4, Math.min(...xs) + 8));
+      const y = Math.max(pr.y + 4, Math.min(pr.y + pr.h - 24, Math.min(...ys) - 26));
+      ctx.fillStyle = 'rgba(0,0,0,0.9)'; ctx.fillRect(x, y, width, 22);
+      ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.strokeRect(x, y, width, 22);
+      ctx.fillStyle = color; ctx.fillText(label, x + 7, y + 11);
+      ctx.restore();
+    };
+    draw(bananaPolygonPeak, false, bananaMode === 'peak');
+    draw(bananaPolygonBg, true, bananaMode === 'bg');
+  }
+
   function render2D() {
     updateScaleBadge2D();
     const dpr = window.devicePixelRatio || 1;
@@ -2863,12 +2945,12 @@
 
       ctx2d.beginPath();
       ctx2d.moveTo(px, pr.y + pr.h); ctx2d.lineTo(px, pr.y + pr.h + 6); ctx2d.stroke();
-      ctx2d.fillText(chX.toString(), px, pr.y + pr.h + 22);
+      ctx2d.fillText(metadata?.root_cube ? (getCalForAxis(plAxes.x)[0] + getCalForAxis(plAxes.x)[1] * chX).toFixed(1) : chX.toString(), px, pr.y + pr.h + 22);
 
       ctx2d.beginPath();
       ctx2d.moveTo(pr.x, py); ctx2d.lineTo(pr.x - 6, py); ctx2d.stroke();
       ctx2d.textAlign = 'right';
-      ctx2d.fillText(chY.toString(), pr.x - 10, py + 5);
+      ctx2d.fillText(metadata?.root_cube ? (getCalForAxis(plAxes.y)[0] + getCalForAxis(plAxes.y)[1] * chY).toFixed(1) : chY.toString(), pr.x - 10, py + 5);
       ctx2d.textAlign = 'center';
     }
 
@@ -2879,7 +2961,7 @@
     ctx2d.fillStyle = '#00e5ff';
     ctx2d.font = 'bold 15px system-ui, -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
-    ctx2d.fillText(isCalX ? `${plAxes.nameX} Energy (keV)` : `${plAxes.nameX} Channel`, pr.x + pr.w / 2, pr.y + pr.h + 46);
+    ctx2d.fillText(axisCoordinateLabel(plAxes.x), pr.x + pr.w / 2, pr.y + pr.h + 46);
 
     ctx2d.save();
     ctx2d.translate(pr.x - 52, pr.y + pr.h / 2);
@@ -2887,7 +2969,7 @@
     ctx2d.fillStyle = '#ff9800';
     ctx2d.font = 'bold 15px system-ui, -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
-    ctx2d.fillText(isCalY ? `${plAxes.nameY} Energy (keV)` : `${plAxes.nameY} Channel`, 0, 0);
+    ctx2d.fillText(axisCoordinateLabel(plAxes.y), 0, 0);
     ctx2d.restore();
 
     // 3. Limit Markers
@@ -2981,60 +3063,6 @@
       }
     }
 
-    // 6. 2D Banana Gate Polygons (Peak & Background)
-    const drawBananaPoly = (poly, isBg, isDrawing) => {
-      if (!poly || poly.length === 0) return;
-      ctx2d.save();
-      ctx2d.beginPath();
-      ctx2d.rect(pr.x, pr.y, pr.w, pr.h);
-      ctx2d.clip();
-
-      const strokeColor = isBg ? '#ff4081' : '#ffd600';
-      const fillColor = isBg ? 'rgba(255, 64, 129, 0.22)' : 'rgba(255, 214, 0, 0.22)';
-      const vertColor = isBg ? '#f50057' : '#ff9100';
-      const labelText = isBg ? 'B Banana (Bg)' : 'W Banana (Peak)';
-
-      ctx2d.beginPath();
-      const pt0 = chToPx2D(poly[0].x, poly[0].y);
-      ctx2d.moveTo(pt0.x, pt0.y);
-      for (let i = 1; i < poly.length; i++) {
-        const pt = chToPx2D(poly[i].x, poly[i].y);
-        ctx2d.lineTo(pt.x, pt.y);
-      }
-      if (!isDrawing) ctx2d.closePath();
-
-      ctx2d.strokeStyle = strokeColor;
-      ctx2d.lineWidth = 2.0;
-      if (!isDrawing) {
-        ctx2d.fillStyle = fillColor;
-        ctx2d.fill();
-      }
-      ctx2d.stroke();
-
-      // Vertices
-      for (let i = 0; i < poly.length; i++) {
-        const pt = chToPx2D(poly[i].x, poly[i].y);
-        ctx2d.fillStyle = (i === 0 && isDrawing) ? '#00e676' : vertColor;
-        ctx2d.beginPath();
-        ctx2d.arc(pt.x, pt.y, (i === 0 && isDrawing) ? 5 : 3.5, 0, 2 * Math.PI);
-        ctx2d.fill();
-        ctx2d.strokeStyle = '#fff';
-        ctx2d.lineWidth = 1;
-        ctx2d.stroke();
-      }
-
-      // Label on first point
-      if (poly.length >= 2) {
-        ctx2d.font = 'bold 11px monospace';
-        ctx2d.fillStyle = strokeColor;
-        ctx2d.fillText(labelText, pt0.x + 8, pt0.y - 6);
-      }
-      ctx2d.restore();
-    };
-
-    drawBananaPoly(bananaPolygonPeak, false, bananaMode === 'peak');
-    drawBananaPoly(bananaPolygonBg, true, bananaMode === 'bg');
-
     // 7. 2D Coincidence Peak Fit Indicators & FWHM Ellipses (Persistent Multi-Fits)
     const fits2DList = (activeFits2D && activeFits2D.length > 0) ? activeFits2D : (fit2DResult && fit2DResult.success ? [fit2DResult] : []);
     for (const f2d of fits2DList) {
@@ -3089,8 +3117,8 @@
       const plAxes = getPlaneAxes(activePlane);
       const isCalX = isAxisCalibrated(plAxes.x);
       const isCalY = isAxisCalibrated(plAxes.y);
-      const xStr = (f2d.centroid_x_e !== undefined) ? `${Number(f2d.centroid_x_e).toFixed(1)} keV` : (isCalX ? `${chToEnergy(plAxes.x, cx).toFixed(1)} keV` : `${Number(cx).toFixed(1)} ch`);
-      const yStr = (f2d.centroid_y_e !== undefined) ? `${Number(f2d.centroid_y_e).toFixed(1)} keV` : (isCalY ? `${chToEnergy(plAxes.y, cy).toFixed(1)} keV` : `${Number(cy).toFixed(1)} ch`);
+      const xStr = (f2d.centroid_x_e !== undefined) ? `${Number(f2d.centroid_x_e).toFixed(1)} ${axisCoordinateUnit(plAxes.x)}` : (isCalX ? `${chToEnergy(plAxes.x, cx).toFixed(1)} ${axisCoordinateUnit(plAxes.x)}` : `${Number(cx).toFixed(1)} ch`);
+      const yStr = (f2d.centroid_y_e !== undefined) ? `${Number(f2d.centroid_y_e).toFixed(1)} ${axisCoordinateUnit(plAxes.y)}` : (isCalY ? `${chToEnergy(plAxes.y, cy).toFixed(1)} ${axisCoordinateUnit(plAxes.y)}` : `${Number(cy).toFixed(1)} ch`);
       const vNum = (typeof f2d.volume === 'number') ? f2d.volume : parseFloat(f2d.volume || 0);
       const volStr = vNum.toLocaleString(undefined, { maximumFractionDigits: 1 });
 
@@ -3132,6 +3160,7 @@
       ctx2d.fillText(lineVol, bX, bY + lineH * 2);
       ctx2d.restore();
     }
+    drawBananaGateOverlays(ctx2d, pr);
   }
 
   // --- Canvas Rendering: 1D Histogram Spectra ---
@@ -3507,7 +3536,7 @@
         const c1 = Math.round(ch0 + frac1 * chSpan);
         const isCal = isAxisCalibrated(axis);
         const badgeLbl = isCal
-          ? `Zoom: ${chToEnergy(axis, c0).toFixed(1)} - ${chToEnergy(axis, c1).toFixed(1)} keV (${c0} - ${c1} ch)`
+          ? `Zoom: ${chToEnergy(axis, c0).toFixed(1)} - ${chToEnergy(axis, c1).toFixed(1)} ${axisCoordinateUnit(axis)} (${c0} - ${c1} ch)`
           : `Zoom: ch ${c0} - ${c1} (${c1 - c0} ch)`;
 
         ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
@@ -3540,7 +3569,7 @@
       ctx.moveTo(px, pr.y + pr.h); ctx.lineTo(px, pr.y + pr.h + 4); ctx.stroke();
       if (isCalTicks) {
         const eStr = chToEnergy(axis, chVal).toFixed(0);
-        ctx.fillText(`${eStr}k (${chVal})`, px, pr.y + pr.h + 16);
+        ctx.fillText(metadata?.root_cube ? (getCalForAxis(axis)[0] + getCalForAxis(axis)[1] * chVal).toFixed(1) : `${eStr}k (${chVal})`, px, pr.y + pr.h + 16);
       } else {
         ctx.fillText(chVal.toString(), px, pr.y + pr.h + 16);
       }
@@ -3576,17 +3605,17 @@
     if (!card) return;
     card.style.display = 'block';
 
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
     const detLabel = axNames[axis] || `Axis ${axis + 1}`;
     const isCal = isAxisCalibrated(axis);
     const modelTag = (data.fit_type === 'hypermet') ? '1D Hypermet Fit' : ((data.fit_type === 'gaussian_tail') ? '1D Left-Tail Fit' : '1D Gaussian Fit');
 
     const titleEl = document.getElementById('fitTitle1D');
-    if (titleEl) titleEl.innerText = `${modelTag} [${detLabel}]: ${isCal ? (data.centroid_e !== undefined ? data.centroid_e + ' keV' : chToEnergy(axis, data.centroid_ch).toFixed(2) + ' keV') : 'ch ' + data.centroid_ch}`;
+    if (titleEl) titleEl.innerText = `${modelTag} [${detLabel}]: ${isCal ? (data.centroid_e !== undefined ? data.centroid_e + ' ' + axisCoordinateUnit(axis) : chToEnergy(axis, data.centroid_ch).toFixed(2) + ' ' + axisCoordinateUnit(axis)) : 'ch ' + data.centroid_ch}`;
 
     // Compact line in format: Centroid: ... | Area: ... | FWHM: ...
     const dec1D = isCal ? 2 : 3;
-    const unit1D = isCal ? 'keV' : 'ch';
+    const unit1D = isCal ? axisCoordinateUnit(axis) : 'ch';
     const c1DVal = (typeof (isCal ? (data.centroid_e !== undefined ? data.centroid_e : chToEnergy(axis, data.centroid_ch)) : data.centroid_ch) === 'number' ? (isCal ? (data.centroid_e !== undefined ? data.centroid_e : chToEnergy(axis, data.centroid_ch)) : data.centroid_ch) : parseFloat(isCal ? data.centroid_e : data.centroid_ch)).toFixed(dec1D);
     const c1DErr = (typeof (isCal ? (data.centroid_e_err !== undefined ? data.centroid_e_err : 0) : data.centroid_ch_err) === 'number' ? (isCal ? data.centroid_e_err : data.centroid_ch_err) : parseFloat(isCal ? data.centroid_e_err : data.centroid_ch_err)).toFixed(dec1D);
     const f1DVal = (typeof (isCal ? (data.fwhm_e !== undefined ? data.fwhm_e : data.fwhm_ch) : data.fwhm_ch) === 'number' ? (isCal ? (data.fwhm_e !== undefined ? data.fwhm_e : data.fwhm_ch) : data.fwhm_ch) : parseFloat(isCal ? data.fwhm_e : data.fwhm_ch)).toFixed(dec1D);
@@ -3600,13 +3629,13 @@
     // Detailed parameters grid
     const fCent = document.getElementById('fitCentroid1D');
     if (fCent) fCent.innerText = isCal
-      ? `${data.centroid_e || chToEnergy(axis, data.centroid_ch).toFixed(2)} ± ${data.centroid_e_err || 0} keV (${data.centroid_ch} ± ${data.centroid_ch_err || 0} ch)`
+      ? `${data.centroid_e || chToEnergy(axis, data.centroid_ch).toFixed(2)} ± ${data.centroid_e_err || 0} ${axisCoordinateUnit(axis)} (${data.centroid_ch} ± ${data.centroid_ch_err || 0} ch)`
       : `${data.centroid_ch} ± ${data.centroid_ch_err || 0} ch`;
     const fArea = document.getElementById('fitArea1D');
     if (fArea) fArea.innerText = `${Math.round(data.area || 0).toLocaleString()} ± ${Math.round(data.area_err || 0).toLocaleString()} counts`;
     const fFWHM = document.getElementById('fitFWHM1D');
     if (fFWHM) fFWHM.innerText = isCal
-      ? `${data.fwhm_e || data.fwhm_ch} ± ${data.fwhm_e_err || data.fwhm_ch_err} keV (${data.fwhm_ch} ± ${data.fwhm_ch_err} ch)`
+      ? `${data.fwhm_e || data.fwhm_ch} ± ${data.fwhm_e_err || data.fwhm_ch_err} ${axisCoordinateUnit(axis)} (${data.fwhm_ch} ± ${data.fwhm_ch_err} ch)`
       : `${data.fwhm_ch} ± ${data.fwhm_ch_err} ch`;
     const fAmp = document.getElementById('fitAmp1D');
     if (fAmp) fAmp.innerText = `${Math.round(data.amplitude || 0).toLocaleString()} ± ${Math.round(data.amplitude_err || 0).toLocaleString()} cts`;
@@ -3636,9 +3665,9 @@
     const chi2El = document.getElementById('fitChi21D');
     if (chi2El) chi2El.innerText = `${data.red_chi2} (NDF=${data.ndf || '-'})`;
 
-    const hudEnergy = isCal ? ` (${data.centroid_e || chToEnergy(axis, data.centroid_ch).toFixed(2)} keV)` : '';
+    const hudEnergy = isCal ? ` (${data.centroid_e || chToEnergy(axis, data.centroid_ch).toFixed(2)} ${axisCoordinateUnit(axis)})` : '';
     const hudEl = document.getElementById('hudCoords');
-    if (hudEl) hudEl.innerText = `1D Fit [${detLabel}]: Centroid = ${data.centroid_ch}${hudEnergy} | Area = ${Math.round(data.area || 0)} ± ${Math.round(data.area_err || 0)} | FWHM = ${isCal ? (data.fwhm_e || data.fwhm_ch) + ' keV' : data.fwhm_ch + ' ch'}`;
+    if (hudEl) hudEl.innerText = `1D Fit [${detLabel}]: Centroid = ${data.centroid_ch}${hudEnergy} | Area = ${Math.round(data.area || 0)} ± ${Math.round(data.area_err || 0)} | FWHM = ${isCal ? (data.fwhm_e || data.fwhm_ch) + ' ' + axisCoordinateUnit(axis) : data.fwhm_ch + ' ch'}`;
   }
 
   function displayMultiFitCard1D(d, axis) {
@@ -3646,7 +3675,7 @@
     if (!card) return;
     card.style.display = 'block';
     const isCal = isAxisCalibrated(axis);
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
     const detLabel = axNames[axis] || `Axis ${axis + 1}`;
 
     document.getElementById('fitTitleMulti1D').innerText = `${detLabel} Multi-Peak Fit (${d.peaks?.length || 0} peaks)`;
@@ -3683,8 +3712,8 @@
     const cy = d.centroid_y_ch !== undefined ? d.centroid_y_ch : d.centroid_y;
     const fx = d.fwhm_x_ch !== undefined ? d.fwhm_x_ch : (d.fwhm_x || 6.0);
     const fy = d.fwhm_y_ch !== undefined ? d.fwhm_y_ch : (d.fwhm_y || 6.0);
-    const ex = d.centroid_x_e !== undefined ? `${Number(d.centroid_x_e).toFixed(1)} keV` : (isCalX ? `${chToEnergy(plAxes.x, cx).toFixed(1)} keV` : '');
-    const ey = d.centroid_y_e !== undefined ? `${Number(d.centroid_y_e).toFixed(1)} keV` : (isCalY ? `${chToEnergy(plAxes.y, cy).toFixed(1)} keV` : '');
+    const ex = d.centroid_x_e !== undefined ? `${Number(d.centroid_x_e).toFixed(1)} ${axisCoordinateUnit(plAxes.x)}` : (isCalX ? `${chToEnergy(plAxes.x, cx).toFixed(1)} ${axisCoordinateUnit(plAxes.x)}` : '');
+    const ey = d.centroid_y_e !== undefined ? `${Number(d.centroid_y_e).toFixed(1)} ${axisCoordinateUnit(plAxes.y)}` : (isCalY ? `${chToEnergy(plAxes.y, cy).toFixed(1)} ${axisCoordinateUnit(plAxes.y)}` : '');
     const gambaNet = Math.round(d.gamba_net !== undefined ? d.gamba_net : (d.gamba_net_counts || 0));
     const rChi2 = (d.red_chi2 !== undefined ? d.red_chi2 : d.reduced_chi2);
 
@@ -3720,8 +3749,8 @@
     if (!card) return;
     card.style.display = 'block';
     const isCal = isAxisCalibrated(axis);
-    const en = isCal ? chToEnergy(axis, d.centroid).toFixed(2) + ' keV' : '';
-    const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+    const en = isCal ? chToEnergy(axis, d.centroid).toFixed(2) + ' ' + axisCoordinateUnit(axis) : '';
+    const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
 
     document.getElementById('integrateTitle1D').innerText = `${axNames[axis] || 'Axis ' + (axis + 1)} Peak Integration`;
     document.getElementById('integrateCompactLine1D').innerText =
@@ -4023,14 +4052,14 @@
     const spec = spec1D[axis];
     if (spec && spec.length > 0) {
       const cal = getCalForAxis(axis);
-      const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+      const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
       const mName = metadata ? (metadata.filename || 'matrix3d') : 'matrix3d';
       let tag = 'projection';
       if (gambaGateActive && gambaGateResult && gambaGateResult.target_axis === axis) tag = 'gamba_cut';
       else if (bananaGateActive && bananaGateResult) tag = 'banana_gate';
       else if (gates1D[0].w.length > 0 || gates1D[1].w.length > 0 || gates1D[2].w.length > 0) tag = 'gated';
 
-      let lines = [`# Exported spectrum for ${mName} - ${axNames[axis]} (${tag})\n# Ch\tEnergy(keV)\tCounts\tError\n`];
+      let lines = [`# Exported spectrum for ${mName} - ${axNames[axis]} (${tag})\n# Ch\tCoordinate (${axisCoordinateUnit(axis)})\tCounts\tError\n`];
       for (let ch = 0; ch < spec.length; ch++) {
         const en = cal[0] + cal[1] * (ch + 0.5) + cal[2] * Math.pow(ch + 0.5, 2);
         const val = spec[ch] || 0;
@@ -4418,6 +4447,8 @@
       is_gated: hasGate,
       bg_scale_factor: 0,
       x_label: 'Channel',
+      x_axis_label: axisCoordinateLabel(selectedAxis),
+      x_unit: axisCoordinateUnit(selectedAxis),
       view_x0: chStart,
       view_x1: chEnd
     };
@@ -4567,8 +4598,8 @@
       if (hud) {
         const isCalX = isAxisCalibrated(plAxes.x);
         const isCalY = isAxisCalibrated(plAxes.y);
-        const ex = isCalX ? ` (${chToEnergy(plAxes.x, cursor2D.x).toFixed(1)} keV)` : '';
-        const ey = isCalY ? ` (${chToEnergy(plAxes.y, cursor2D.y).toFixed(1)} keV)` : '';
+        const ex = isCalX ? ` (${chToEnergy(plAxes.x, cursor2D.x).toFixed(1)} ${axisCoordinateUnit(plAxes.x)})` : '';
+        const ey = isCalY ? ` (${chToEnergy(plAxes.y, cursor2D.y).toFixed(1)} ${axisCoordinateUnit(plAxes.y)})` : '';
         hud.innerText = `2D [Plane ${activePlane}]: ${plAxes.nameX}=ch ${cursor2D.x}${ex} | ${plAxes.nameY}=ch ${cursor2D.y}${ey}`;
       }
     });
@@ -4656,10 +4687,10 @@
         const hud = document.getElementById('hudCoords');
         if (hud) {
           const isCal = isAxisCalibrated(ax);
-          const en = isCal ? ` (${chToEnergy(ax, ch).toFixed(2)} keV)` : '';
+          const en = isCal ? ` (${chToEnergy(ax, ch).toFixed(2)} ${axisCoordinateUnit(ax)})` : '';
           const spec = spec1D[ax];
           const cnt = (spec && ch >= 0 && ch < spec.length) ? spec[ch] : 0;
-          const axNames = ['Axis 1 (X)', 'Axis 2 (Y)', 'Axis 3 (Z)'];
+          const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
           hud.innerText = `${axNames[ax]}: Channel ${ch}${en} | Counts: ${cnt.toLocaleString()}`;
         }
         render1DSpectrum(ax);
@@ -5028,6 +5059,62 @@
     });
   }
 
+  let cubeLiveBusy = false;
+  let cubeLiveTimer = null;
+  function updateCubeLiveStatus() {
+    const live = metadata?.live;
+    document.getElementById('liveCubeControls').style.display = live?.enabled ? '' : 'none';
+    if (!live?.enabled) return;
+    document.getElementById('liveCubePause').textContent = live.paused ? 'Resume updates' : 'Pause updates';
+    document.getElementById('liveCubeStatus').textContent = live.error
+      ? `Disconnected: ${live.error}. Last good snapshot retained; retrying.`
+      : `${live.paused ? 'Paused' : 'Live'} · ${metadata.total_counts.toLocaleString()} counts · snapshot ${live.generation}`;
+  }
+  function scheduleCubeLive() {
+    clearTimeout(cubeLiveTimer);
+    if (!metadata?.live?.enabled) return;
+    const seconds = Number(document.getElementById('liveCubeInterval').value) || 5;
+    cubeLiveTimer = setTimeout(() => refreshCubeLive(false), seconds * 1000);
+  }
+  async function toggleCubeLive() {
+    if (cubeLiveBusy || !metadata?.live?.enabled) return;
+    cubeLiveBusy = true;
+    try {
+      const res = await fetch(`/api/live_control?paused=${metadata.live.paused ? 0 : 1}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      metadata = await res.json();
+      updateCubeLiveStatus();
+    } finally { cubeLiveBusy = false; scheduleCubeLive(); }
+  }
+  async function refreshCubeLive(force = false) {
+    if (cubeLiveBusy || !metadata?.live?.enabled) return;
+    if (metadata.live.paused && !force) { scheduleCubeLive(); return; }
+    // Fit-derived 3D cuts remain tied to the fit snapshot.
+    if (gambaGateActive && !force) {
+      document.getElementById('liveCubeStatus').textContent = 'Updates held while a fit-derived cut is active. Clear the cut to resume.';
+      scheduleCubeLive(); return;
+    }
+    cubeLiveBusy = true;
+    try {
+      const res = await fetch(`/api/live_refresh?force=${force ? 1 : 0}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const changed = data.live.generation !== metadata.live.generation;
+      metadata = data;
+      updateCubeLiveStatus();
+      if (changed) {
+        maxCountGlobal = Math.max(maxCountGlobal, data.max_count);
+        lastGateConfigKey = '';
+        if (gambaGateActive) { gambaGateActive = false; gambaGateResult = null; }
+        await fetchProjections();
+        if (bananaGateActive) await applyBananaGate();
+        await fetchTileAndRender();
+      }
+    } catch (error) {
+      document.getElementById('liveCubeStatus').textContent = `Refresh failed: ${error.message}. Retrying.`;
+    } finally { cubeLiveBusy = false; scheduleCubeLive(); }
+  }
+
   // --- App Initialization ---
   async function init() {
     updateColorLUT();
@@ -5035,6 +5122,15 @@
     fetchFitLogStatus();
     resizeCanvases();
     await fetchMetadata();
+    if (metadata?.live?.enabled) {
+      const sel = document.getElementById('liveCubeInterval');
+      const interval = String(metadata.live.interval);
+      if (![...sel.options].some(o => o.value === interval)) sel.add(new Option(`${interval} s`, interval));
+      sel.value = interval;
+      sel.onchange = scheduleCubeLive;
+      updateCubeLiveStatus();
+      scheduleCubeLive();
+    }
   }
 
   window.addEventListener('DOMContentLoaded', init);

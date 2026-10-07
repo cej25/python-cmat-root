@@ -550,8 +550,9 @@
             <label class="form-label">X-Axis Coordinate:</label>
             <select id="xAxisMode" onchange="updateXAxisMode()">
               <option value="channel">Channel Coordinates</option>
-              <option value="energy">Calibrated Energy / Time</option>
+              <option value="energy">Calibrated coordinate (time / energy)</option>
             </select>
+            <input type="text" id="xUnitInput" placeholder="X unit, e.g. ns" aria-label="Calibrated X unit" title="Label for the existing calibrated X values; does not rescale them" onchange="updateXAxisUnit()" style="margin-top:4px;" disabled>
           </div>
           <div class="form-group">
             <label class="form-label">Compression / Binning:</label>
@@ -595,6 +596,15 @@
         <div class="card-title">
           <span>⚙️ Model Parameters & Initial Guesses</span>
           <button class="btn btn-sm" onclick="autoEstimateGuesses()" title="Auto-detect prompt centroid, FWHM, and decay slope">⚡ Auto Guess</button>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="fitModel">Fit model:</label>
+          <select id="fitModel" onchange="onFitModelChange()">
+            <option value="convolved">Gaussian + exponential convolution</option>
+            <option value="exponential">Exponential decay (no prompt Gaussian)</option>
+          </select>
+          <small style="color:var(--text-muted);">Exponential starts at the centroid; set it to the decay onset and fix it for a stable fit.</small>
         </div>
 
         <table class="params-table">
@@ -863,6 +873,7 @@
     const viewerRequestWaiters = new Map();
     let currentData = null;      // Active/orientation-specific SpectrumData
     let sourceData = null;       // Unmodified loaded SpectrumData
+    let rawData = null;          // Original coordinates before axis selection
     let activeFitResult = null;  // Last Fit JSON
     let lastScanData = null;     // Last Scan JSON
     let currentFileName = "";
@@ -1159,6 +1170,7 @@
     async function fetchViewerSnapshot(axis = requestedViewerAxis) {
       const snapshot = await requestViewerSnapshot(axis);
       if (!snapshot.success) return false;
+      currentFileName = '';
       processLoadedSpectrum(snapshot);
       return true;
     }
@@ -1222,6 +1234,7 @@
         const res = await fetch(`/api/halflife/active_spectrum?axis=${requestedAxis}`);
         const json = await res.json();
         if (!json.error) {
+          currentFileName = '';
           processLoadedSpectrum(json);
           return true;
         }
@@ -1231,6 +1244,7 @@
         const fallbackRes = await fetch(`/api/halflife/active_spectrum?axis=${fallbackAxis}`);
         const fallbackJson = await fallbackRes.json();
         if (!fallbackJson.error) {
+          currentFileName = '';
           processLoadedSpectrum(fallbackJson);
           return true;
         }
@@ -1246,6 +1260,30 @@
     }
 
     function processLoadedSpectrum(data) {
+      const newSource = rawData !== data;
+      rawData = data;
+      const axisMode = document.getElementById('xAxisMode');
+      const calibrated = Array.isArray(data.x_energy) && data.x_energy.length === data.x.length
+        && data.x_energy.every(Number.isFinite)
+        && data.x_energy.every((value, i) => i === 0 || value > data.x_energy[i - 1]);
+      if (!axisMode.dataset.userSelected) axisMode.value = calibrated ? 'energy' : 'channel';
+      axisMode.options[1].textContent = calibrated
+        ? `Calibrated: ${data.x_axis_label || 'Energy (keV)'}`
+        : 'Calibrated coordinate unavailable';
+      axisMode.options[1].disabled = !calibrated;
+      if (!calibrated) axisMode.value = 'channel';
+      const unitInput = document.getElementById('xUnitInput');
+      if (newSource) delete unitInput.dataset.userSelected;
+      unitInput.disabled = axisMode.value === 'channel';
+      if (!unitInput.dataset.userSelected) unitInput.value = data.x_unit || (calibrated ? 'keV' : 'channels');
+      const selected = calibrated && axisMode.value === 'energy' && /channel/i.test(data.x_label || '');
+      data = selected ? {
+        ...data,
+        x: data.x_energy.slice(),
+        x_label: data.x_axis_label || 'Energy (keV)',
+        x_unit: unitInput.value || data.x_unit || 'axis units'
+      } : { ...data, x_unit: unitInput.value || data.x_unit || (axisMode.value === 'channel' ? 'channels' : 'keV') };
+      if (axisMode.value === 'channel' && /channel/i.test(data.x_label || '')) data.x_unit = 'channels';
       sourceData = data;
       const mirrorToggle = document.getElementById('mirrorSpectrum');
       if (mirrorToggle) mirrorToggle.checked = false;
@@ -1254,7 +1292,7 @@
       currentData = data;
       document.getElementById('fileMetaInfo').innerHTML = `
         <strong>File:</strong> ${data.filename} | <strong>Channels:</strong> ${data.x.length} | 
-        <strong>Range:</strong> [${data.x[0].toFixed(1)} .. ${data.x[data.x.length - 1].toFixed(1)}] ${data.x_label} |
+        <strong>Range:</strong> [${formatRangeValue(data.x[0])} .. ${formatRangeValue(data.x[data.x.length - 1])}] ${data.x_label} |
         ${data.is_gated ? '<span style="color:var(--accent-green);">Gated Cut (Subtracted)</span>' : 'Standard Projection'}
       `;
 
@@ -1302,7 +1340,7 @@
       if (fileMeta && currentData) {
         fileMeta.innerHTML = `
           <strong>File:</strong> ${currentData.filename} | <strong>Channels:</strong> ${currentData.x.length} |
-          <strong>Range:</strong> [${currentData.x[0].toFixed(1)} .. ${currentData.x[currentData.x.length - 1].toFixed(1)}] ${currentData.x_label} |
+          <strong>Range:</strong> [${formatRangeValue(currentData.x[0])} .. ${formatRangeValue(currentData.x[currentData.x.length - 1])}] ${currentData.x_label} |
           ${currentData.mirrored ? '<span style="color:var(--accent-purple);">Mirrored Orientation</span>' : 'Standard Orientation'}
         `;
       }
@@ -1337,7 +1375,23 @@
     }
 
     function updateXAxisMode() {
+      document.getElementById('xAxisMode').dataset.userSelected = '1';
       if (currentFileName) loadFile(currentFileName);
+      else if (rawData) processLoadedSpectrum(rawData);
+    }
+
+    function updateXAxisUnit() {
+      if (!currentData || document.getElementById('xAxisMode').value !== 'energy') return;
+      const input = document.getElementById('xUnitInput');
+      const unit = input.value.trim() || 'axis units';
+      input.value = unit;
+      input.dataset.userSelected = '1';
+      currentData.x_unit = unit;
+      sourceData.x_unit = unit;
+      if (activeFitResult) {
+        activeFitResult.x_unit = unit;
+        updateResultsUI(activeFitResult);
+      }
     }
 
     // Auto Estimate Parameters
@@ -1383,10 +1437,10 @@
           break;
         }
       }
-      const fwhmEst = Math.max(2, Math.abs(centroidEst - x[halfIdx]) * 2.2);
+      const fwhmEst = Math.max(2 * getChannelStep(), Math.abs(centroidEst - x[halfIdx]) * 2.2);
 
       // Half life estimate from tail slope
-      let t12Est = 20.0;
+      let t12Est = Math.max(getChannelStep(), (x[indices[indices.length - 1]] - x[indices[0]]) / 10);
       let tailX = [], tailY = [];
       for (let i = maxIdx + 1; i <= indices[indices.length - 1]; i++) {
         const val = y[i] - bgEst;
@@ -1411,11 +1465,11 @@
       // Scale
       let sumCounts = 0;
       for (let idx of indices) sumCounts += Math.max(0, y[idx] - bgEst);
-      const scaleEst = Math.max(100, sumCounts);
+      const scaleEst = Math.max(1e-6, sumCounts * getChannelStep());
 
-      document.getElementById('p_t12').value = t12Est.toFixed(3);
-      document.getElementById('p_fwhm').value = fwhmEst.toFixed(3);
-      document.getElementById('p_centroid').value = centroidEst.toFixed(2);
+      document.getElementById('p_t12').value = formatParameterValue('p_t12', t12Est);
+      document.getElementById('p_fwhm').value = formatParameterValue('p_fwhm', fwhmEst);
+      document.getElementById('p_centroid').value = formatParameterValue('p_centroid', centroidEst);
       document.getElementById('p_scale').value = scaleEst.toFixed(1);
       document.getElementById('p_bg').value = bgEst.toFixed(2);
       Object.keys(parameterState).forEach(id => {
@@ -1425,6 +1479,17 @@
         const input = document.getElementById(id);
         input.value = formatParameterValue(id, clampParameterValue(id, getParameterValue(id)));
       });
+      if (document.getElementById('fitModel').value === 'exponential') {
+        const fwhmInput = document.getElementById('p_fwhm');
+        fwhmInput.dataset.previousValue = fwhmInput.value;
+        fwhmInput.value = '0';
+        const onset = document.getElementById('p_centroid');
+        onset.dataset.previousValue = onset.value;
+        if (document.getElementById('fix_centroid').checked) {
+          onset.value = formatParameterValue('p_centroid', getFitRange().min);
+          parameterState.p_centroid.center = getFitRange().min;
+        }
+      }
       syncAllParameterControls();
 
       redrawPlot();
@@ -1466,7 +1531,7 @@
 
     function getFitSpan() {
       const fit = getFitRange();
-      return Math.max(1, Math.abs(fit.max - fit.min));
+      return Math.max(1e-12, Math.abs(fit.max - fit.min));
     }
 
     function getParameterValue(id) {
@@ -1540,7 +1605,7 @@
     }
 
     function formatParameterValue(id, value) {
-      const number = Math.abs(value) >= 1000 ? value.toFixed(1) : Math.abs(value) >= 1 ? value.toFixed(3) : value.toFixed(6);
+      const number = Math.abs(value) >= 1000 ? value.toFixed(3) : Math.abs(value) >= 1 ? value.toFixed(5) : Number(value.toPrecision(9)).toString();
       return number.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') || '0';
     }
 
@@ -1638,6 +1703,8 @@
             x: currentData.x,
             y: currentData.y,
             dy: currentData.dy,
+            x_label: currentData.x_label,
+            x_unit: currentData.x_unit,
             factor: factor,
             filename: currentData.filename
           })
@@ -1663,8 +1730,17 @@
 
       for (let i = 0; i < xArr.length; i++) {
         const x1 = xArr[i] - cent;
+        if (Math.abs(fwhm) < 1e-9 && Math.abs(t12) < 1e-9) {
+          yOut[i] = bg;
+          continue;
+        }
         if (Math.abs(t12) < 1e-9) {
           yOut[i] = scale * Math.exp(-Math.pow(x1 / sigmaG, 2)) / (Math.sqrt(Math.PI) * sigmaG) + bg;
+          continue;
+        }
+        if (Math.abs(fwhm) < 1e-9) {
+          yOut[i] = bg + (tau < 0 ? x1 >= 0 : x1 <= 0)
+            * scale * Math.exp(x1 / tau) / absTau;
           continue;
         }
         let u = (x1 / sigmaG) + ep;
@@ -1709,6 +1785,38 @@
       return true;
     }
 
+    function onFitModelChange() {
+      const pure = document.getElementById('fitModel').value === 'exponential';
+      const input = document.getElementById('p_fwhm');
+      const fixed = document.getElementById('fix_fwhm');
+      if (pure) {
+        input.dataset.previousValue = input.value;
+        fixed.dataset.previousChecked = String(fixed.checked);
+        input.value = '0';
+        fixed.checked = true;
+        const onset = document.getElementById('p_centroid');
+        const fixOnset = document.getElementById('fix_centroid');
+        onset.dataset.previousValue = onset.value;
+        fixOnset.dataset.previousChecked = String(fixOnset.checked);
+        onset.value = formatParameterValue('p_centroid', getFitRange().min);
+        fixOnset.checked = true;
+        parameterState.p_centroid.center = getFitRange().min;
+      } else {
+        input.value = input.dataset.previousValue || input.value;
+        fixed.checked = fixed.dataset.previousChecked === 'true';
+        const onset = document.getElementById('p_centroid');
+        const fixOnset = document.getElementById('fix_centroid');
+        onset.value = onset.dataset.previousValue || onset.value;
+        fixOnset.checked = fixOnset.dataset.previousChecked === 'true';
+      }
+      input.disabled = pure;
+      fixed.disabled = pure;
+      syncParameterControl('p_fwhm');
+      syncParameterControl('p_centroid');
+      activeFitResult = null;
+      redrawPlot();
+    }
+
     // Execute Fit
     async function executeFit() {
       if (!currentData) {
@@ -1716,7 +1824,8 @@
         return;
       }
 
-      const zeroFwhmFit = prepareZeroFwhmFit();
+      const model = document.getElementById('fitModel').value;
+      const zeroFwhmFit = model === 'exponential' ? false : prepareZeroFwhmFit();
       const fitRange = getFitRange();
       if (zeroFwhmFit) redrawPlot();
 
@@ -1728,6 +1837,9 @@
         x: currentData.x,
         y: currentData.y,
         dy: currentData.dy,
+        x_label: currentData.x_label,
+        x_unit: currentData.x_unit,
+        model: model,
         t12: parseFloat(document.getElementById('p_t12').value),
         fwhm: parseFloat(document.getElementById('p_fwhm').value),
         centroid: parseFloat(document.getElementById('p_centroid').value),
@@ -1735,7 +1847,7 @@
         bg: parseFloat(document.getElementById('p_bg').value),
         freepars: [
           !document.getElementById('fix_t12').checked,
-          !document.getElementById('fix_fwhm').checked,
+          model !== 'exponential' && !document.getElementById('fix_fwhm').checked,
           zeroFwhmFit ? false : !document.getElementById('fix_centroid').checked,
           !document.getElementById('fix_scale').checked,
           !document.getElementById('fix_bg').checked
@@ -1759,9 +1871,9 @@
         result.spectrum_mirrored = Boolean(currentData?.mirrored);
         activeFitResult = result;
         // Update input boxes with optimized parameters
-        document.getElementById('p_t12').value = result.t12.toFixed(3);
-        document.getElementById('p_fwhm').value = result.fwhm.toFixed(3);
-        document.getElementById('p_centroid').value = result.centroid.toFixed(2);
+        document.getElementById('p_t12').value = formatParameterValue('p_t12', result.t12);
+        document.getElementById('p_fwhm').value = formatParameterValue('p_fwhm', result.fwhm);
+        document.getElementById('p_centroid').value = formatParameterValue('p_centroid', result.centroid);
         document.getElementById('p_scale').value = result.scale.toFixed(1);
         document.getElementById('p_bg').value = result.bg.toFixed(2);
         syncAllParameterControls();
@@ -1799,12 +1911,12 @@
       badge.innerText = `Fit Converged (${res.nfev} evals)`;
       badge.style.color = "var(--accent-green)";
 
-      const unit = currentData ? currentData.x_label : "ch";
-      document.getElementById('resT12').innerText = `${res.t12.toFixed(3)}`;
-      document.getElementById('resT12Err').innerText = res.freepars[0] ? `± ${res.t12_err.toFixed(3)} ${unit}` : '(FIXED)';
+      const unit = currentData ? currentData.x_unit || currentData.x_label : "ch";
+      document.getElementById('resT12').innerText = formatParameterValue('p_t12', res.t12);
+      document.getElementById('resT12Err').innerText = res.freepars[0] ? `± ${formatParameterValue('p_t12', res.t12_err)} ${unit}` : `(FIXED ${unit})`;
 
-      document.getElementById('resFWHM').innerText = `${res.fwhm.toFixed(3)}`;
-      document.getElementById('resFWHMErr').innerText = res.freepars[1] ? `± ${res.fwhm_err.toFixed(3)} ${unit}` : '(FIXED)';
+      document.getElementById('resFWHM').innerText = res.model === 'exponential' ? '—' : formatParameterValue('p_fwhm', res.fwhm);
+      document.getElementById('resFWHMErr').innerText = res.model === 'exponential' ? '(not used)' : res.freepars[1] ? `± ${formatParameterValue('p_fwhm', res.fwhm_err)} ${unit}` : `(FIXED ${unit})`;
 
       document.getElementById('resCentroid').innerText = `${res.centroid.toFixed(2)}`;
       document.getElementById('resCentroidErr').innerText = res.freepars[2] ? `± ${res.centroid_err.toFixed(2)}` : '(FIXED)';
@@ -2029,7 +2141,7 @@
 
       // 4. Model Curve & Components
       const t12 = parseFloat(document.getElementById('p_t12').value);
-      const fwhm = parseFloat(document.getElementById('p_fwhm').value);
+      const fwhm = document.getElementById('fitModel').value === 'exponential' ? 0 : parseFloat(document.getElementById('p_fwhm').value);
       const cent = parseFloat(document.getElementById('p_centroid').value);
       const scale = parseFloat(document.getElementById('p_scale').value);
       const bg = parseFloat(document.getElementById('p_bg').value);
@@ -2059,7 +2171,7 @@
       // and is precisely the function that gets convolved with the exponential.
       // Its peak is intentionally taller/narrower than the convoluted fit, since
       // the exponential smears the same counts over a wider range.
-      const drawPrompt = showComps && Math.abs(t12) > 0.1;
+      const drawPrompt = showComps && Math.abs(t12) > 0.1 && document.getElementById('fitModel').value !== 'exponential';
       if (drawPrompt) {
         const promptY = evaluateModel(curveX, 0.0, fwhm, cent, scale, bg);
         ctx.strokeStyle = "#fbbf24";
@@ -2382,8 +2494,11 @@
 
       const payload = {
         x: currentData.x,
+        model: document.getElementById('fitModel').value,
         y: currentData.y,
         dy: currentData.dy,
+        x_label: currentData.x_label,
+        x_unit: currentData.x_unit,
         b_min: bMin,
         b_max: bMax,
         steps: steps,
@@ -2393,7 +2508,7 @@
         scale: parseFloat(document.getElementById('p_scale').value),
         freepars: [
           !document.getElementById('fix_t12').checked,
-          !document.getElementById('fix_fwhm').checked,
+          document.getElementById('fitModel').value !== 'exponential' && !document.getElementById('fix_fwhm').checked,
           !document.getElementById('fix_centroid').checked,
           !document.getElementById('fix_scale').checked,
           false // fixed bg during scan steps
@@ -2520,19 +2635,21 @@
       let content = `# Input file: ${currentData.filename}\n`;
       content += `# Output file: ${currentData.filename}.fit\n`;
       content += `#++++++++++++Results of fit++++++++++++\n`;
-      content += `# t_1/2 = ${activeFitResult.t12.toFixed(3)} +/- ${activeFitResult.t12_err.toFixed(3)}\n`;
-      content += `# FWHM = ${activeFitResult.fwhm.toFixed(3)} +/- ${activeFitResult.fwhm_err.toFixed(3)}\n`;
-      content += `# Centroid = ${activeFitResult.centroid.toFixed(2)} +/- ${activeFitResult.centroid_err.toFixed(2)}\n`;
+      content += `# X coordinate: ${currentData.x_label}\n`;
+      content += `# t_1/2 = ${formatParameterValue('p_t12', activeFitResult.t12)} +/- ${formatParameterValue('p_t12', activeFitResult.t12_err)} ${currentData.x_unit}\n`;
+      content += `# Model: ${activeFitResult.model || 'convolved'}\n`;
+      if (activeFitResult.model !== 'exponential') content += `# FWHM = ${formatParameterValue('p_fwhm', activeFitResult.fwhm)} +/- ${formatParameterValue('p_fwhm', activeFitResult.fwhm_err)}\n`;
+      content += `# Centroid = ${formatParameterValue('p_centroid', activeFitResult.centroid)} +/- ${formatParameterValue('p_centroid', activeFitResult.centroid_err)}\n`;
       content += `# Scaling factor = ${activeFitResult.scale.toFixed(2)} +/- ${activeFitResult.scale_err.toFixed(2)}\n`;
       content += `# Background level = ${activeFitResult.bg.toFixed(2)} (fixed)\n`;
       content += `# Chisqr/D.O.F. = ${activeFitResult.chisq_ndf.toFixed(3)}\n`;
       content += `#++++++++++++++++++++++++++++++++++++++\n`;
-      content += `#   Chan \t    fit\n`;
+      content += `#   X (${currentData.x_unit}) \t    fit\n`;
 
       const x = activeFitResult.x_eval;
       const yFit = activeFitResult.y_fit;
       for (let i = 0; i < x.length; i++) {
-        content += `${x[i].toFixed(1)}\t${yFit[i].toFixed(3)}\n`;
+        content += `${Number(x[i].toPrecision(12))}\t${yFit[i].toFixed(3)}\n`;
       }
 
       const blob = new Blob([content], { type: 'text/plain' });
@@ -2547,34 +2664,34 @@
         alert("Please perform a fit first before exporting PDF.");
         return;
       }
-      const isLog = document.getElementById('plotLogScale').checked ? 1 : 0;
-      const params = new URLSearchParams({
-        file: currentData.filename,
-        t12: String(activeFitResult.t12),
-        t12_err: String(activeFitResult.t12_err),
-        fwhm: String(activeFitResult.fwhm),
-        fwhm_err: String(activeFitResult.fwhm_err),
-        centroid: String(activeFitResult.centroid),
-        centroid_err: String(activeFitResult.centroid_err),
-        scale: String(activeFitResult.scale),
-        scale_err: String(activeFitResult.scale_err),
-        bg: String(activeFitResult.bg),
-        bg_err: String(activeFitResult.bg_err),
-        freepars: JSON.stringify(activeFitResult.freepars),
-        r0: String(activeFitResult.fit_range[0]),
-        r1: String(activeFitResult.fit_range[1]),
-        log: String(isLog),
-        mirrored: currentData.mirrored ? '1' : '0'
-      });
-      // Mirror the on-screen zoom so the PDF shows the same x/y window. Sent as the
-      // exact limits used by the last redraw; omitted if the plot has never drawn.
+      const payload = {
+        filename: currentData.filename,
+        x_label: currentData.x_label,
+        fit: activeFitResult,
+        log: document.getElementById('plotLogScale').checked
+      };
       const hasLimits = [plotLimits.xMin, plotLimits.xMax, plotLimits.yMin, plotLimits.yMax]
         .every(v => Number.isFinite(v));
       if (hasLimits) {
-        params.set('xlim', JSON.stringify([plotLimits.xMin, plotLimits.xMax]));
-        params.set('ylim', JSON.stringify([plotLimits.yMin, plotLimits.yMax]));
+        payload.xlim = [plotLimits.xMin, plotLimits.xMax];
+        payload.ylim = [plotLimits.yMin, plotLimits.yMax];
       }
-      window.open(`/api/halflife/export_pdf?${params.toString()}`, '_blank');
+      try {
+        const response = await fetch('/api/halflife/export_pdf', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error((await response.json()).error || 'PDF export failed');
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${currentData.filename.replace(/\.dat$/i, '')}_halflife_fit.pdf`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      } catch (error) {
+        alert(`PDF export failed: ${error.message}`);
+      }
     }
   </script>
 </body>

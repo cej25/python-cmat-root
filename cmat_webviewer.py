@@ -53,6 +53,8 @@ except Exception:
     pass
 
 from cmat import CMATReader
+from root_matrix import ROOTMatrixReader, split_matrix_spec, matrix_spec, list_root_histograms, describe_root_histograms
+from root_http import ROOTHTTPReader, histogram_url, list_http_histograms, infer_server_url, normalize_url
 
 CONFIG_FILENAME = "python-cmat-config.txt"
 
@@ -1630,7 +1632,7 @@ def print_fit_2d_terminal_report(res, filename, is_cal, verbosity="compact"):
     print(f"{bar}\n", flush=True)
 
 
-def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=None, cal=None, axis_label=None, title=None, grid_mode="both", peaks=None, fits_list=None):
+def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=None, cal=None, axis_label=None, title=None, grid_mode="both", peaks=None, fits_list=None, force_calibrated=False, channel_offset=0.0):
     """
     Generates a publication-quality 1D spectrum vector PDF with white background,
     Times New Roman font, inward ticks, stepped staircase histogram, optional calibration,
@@ -1675,11 +1677,11 @@ def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=No
     sub_x = np.arange(ch_start, ch_end + 1, dtype=np.float64)
     sub_y = spec[ch_start:ch_end + 1]
 
-    is_cal = is_calibrated_coeffs(cal)
+    is_cal = force_calibrated or is_calibrated_coeffs(cal)
     if is_cal:
-        plot_x = np.array([ch_to_energy(c, cal) for c in sub_x])
-        x_lim_0 = ch_to_energy(ch_start, cal)
-        x_lim_1 = ch_to_energy(ch_end, cal)
+        plot_x = np.array([ch_to_energy(c + channel_offset, cal) for c in sub_x])
+        x_lim_0 = ch_to_energy(ch_start + channel_offset, cal)
+        x_lim_1 = ch_to_energy(ch_end + channel_offset, cal)
         x_axis_name = axis_label or "Energy (keV)"
     else:
         plot_x = sub_x
@@ -1693,8 +1695,8 @@ def generate_pdf_1d(spec, ch_start, ch_end, is_log=False, zoom_y=1.0, fit_res=No
     for k in range(len(sub_x)):
         c = sub_x[k]
         val = sub_y[k]
-        x_left = ch_to_energy(c - 0.5, cal) if is_cal else (c - 0.5)
-        x_right = ch_to_energy(c + 0.5, cal) if is_cal else (c + 0.5)
+        x_left = ch_to_energy(c + channel_offset - 0.5, cal) if is_cal else (c - 0.5)
+        x_right = ch_to_energy(c + channel_offset + 0.5, cal) if is_cal else (c + 0.5)
         step_x.extend([x_left, x_right])
         step_y.extend([val, val])
 
@@ -2077,11 +2079,11 @@ def generate_pdf_2d(matrix, x0, x1, y0, y1, cmap_name="turbo", scale_mode="log",
     return buf.getvalue()
 
 
-def export_1d_ascii(filepath: Path, spec: np.ndarray, cal: list = None, header: str = "", dy: np.ndarray = None, is_gated: bool = False, bg_scale: float = 0.0) -> None:
+def export_1d_ascii(filepath: Path, spec: np.ndarray, cal: list = None, header: str = "", dy: np.ndarray = None, is_gated: bool = False, bg_scale: float = 0.0, force_calibrated: bool = False, channel_offset: float = 0.0) -> None:
     """Export 1D spectrum to ASCII .dat file with columns: Channel, Energy (if calibrated), Counts, Error."""
     filepath = Path(filepath)
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    is_cal = is_calibrated_coeffs(cal)
+    is_cal = force_calibrated or is_calibrated_coeffs(cal)
     
     if dy is None:
         if is_gated and bg_scale > 0:
@@ -2096,7 +2098,7 @@ def export_1d_ascii(filepath: Path, spec: np.ndarray, cal: list = None, header: 
         if is_cal:
             f.write("# Channel\tEnergy_keV\tCounts\tError\n")
             for ch, (val, err) in enumerate(zip(spec, dy)):
-                e = ch_to_energy(ch, cal)
+                e = ch_to_energy(ch + channel_offset, cal)
                 f.write(f"{ch}\t{e:.4f}\t{val:.2f}\t{err:.2f}\n")
         else:
             f.write("# Channel\tCounts\tError\n")
@@ -4193,6 +4195,8 @@ class CMATSession:
     """
     def __init__(self, config: dict = None, config_path: Path = None):
         self.matrices = []
+        self.live_browser_url = ""
+        self.cube_session = None
         self.active_index = 0
         self.config = config.copy() if config else DEFAULT_CONFIG.copy()
         self.config_path = config_path
@@ -4223,20 +4227,29 @@ class CMATSession:
         }
 
     def add_matrix_file(self, path: Path, name: str = None, cal: dict = None) -> int:
-        path = Path(path).resolve()
+        path, object_name = split_matrix_spec(path)
+        path = path.resolve()
+        source = matrix_spec(path, object_name)
         for idx, m in enumerate(self.matrices):
-            if m["path"] == str(path):
+            if m["path"] == source:
                 if name:
                     m["name"] = name
                 return idx
 
-        reader = CMATReader(path)
+        reader = ROOTMatrixReader(path, object_name) if path.suffix.lower() == ".root" else CMATReader(path)
+        if isinstance(reader, ROOTMatrixReader):
+            source = matrix_spec(path, reader.object_name)
+            for idx, m in enumerate(self.matrices):
+                if m["path"] == source:
+                    return idx
         mat = reader.to_numpy()
         proj_x = reader.get_projection(axis=0)
         proj_y = reader.get_projection(axis=1)
-        matrix_name = name or path.name
+        matrix_name = name or (f"{path.name}::{reader.object_name}" if isinstance(reader, ROOTMatrixReader) else path.name)
 
         matrix_cal = {0: list(self.cal[0]), 1: list(self.cal[1])}
+        if isinstance(reader, ROOTMatrixReader):
+            matrix_cal = {axis: list(coeffs) for axis, coeffs in reader.cal.items()}
         if cal:
             if isinstance(cal, dict):
                 for k, v in cal.items():
@@ -4253,7 +4266,7 @@ class CMATSession:
             "index": len(self.matrices),
             "name": matrix_name,
             "filename": path.name,
-            "path": str(path),
+            "path": source,
             "reader": reader,
             "matrix": mat,
             "proj": proj_x,
@@ -4265,10 +4278,83 @@ class CMATSession:
             "max_count": int(np.max(mat)),
             "nonzero_bins": int(np.count_nonzero(mat)),
             "is_symmetric": bool(reader.is_symmetric),
+            "is_1d": bool(isinstance(reader, ROOTMatrixReader) and reader.ndim == 1),
             "cal": matrix_cal,
         }
         self.matrices.append(entry)
         return len(self.matrices) - 1
+
+    def add_live_histogram(self, url, interval=2.0):
+        source = histogram_url(url)
+        for m in self.matrices:
+            if m["path"] == source:
+                # Explicit reconnect also accepts a histogram whose axes changed.
+                reader = ROOTHTTPReader(source)
+                mat = reader.to_numpy()
+                if mat.shape != m["matrix"].shape or reader.cal != m["reader"].cal:
+                    self.gates = {0: None, 1: None}
+                m.update(reader=reader, matrix=mat, proj_x=reader.get_projection(0),
+                         proj_y=reader.get_projection(1), shape=[reader.res1, reader.res2],
+                         shape_yx=[reader.res2, reader.res1], cal=reader.cal.copy(),
+                         is_1d=reader.ndim == 1, is_symmetric=reader.is_symmetric,
+                         total_counts=float(mat.sum()), max_count=float(mat.max()),
+                         nonzero_bins=int(np.count_nonzero(mat)))
+                m["proj"] = m["proj_x"]
+                m["live"].update(connected=True, error="", last_updated=time.time(),
+                                 last_checked=time.time(), revision=m["live"]["revision"] + 1)
+                return m["index"]
+        reader = ROOTHTTPReader(source)
+        mat = reader.to_numpy()
+        entry = {"index": len(self.matrices), "name": reader.object_name + " [live]",
+                 "filename": reader.object_name, "path": source, "reader": reader,
+                 "matrix": mat, "proj_x": reader.get_projection(0),
+                 "proj_y": reader.get_projection(1), "shape": [reader.res1, reader.res2],
+                 "shape_yx": [reader.res2, reader.res1], "total_counts": float(mat.sum()),
+                 "max_count": float(mat.max()), "nonzero_bins": int(np.count_nonzero(mat)),
+                 "is_symmetric": reader.is_symmetric, "is_1d": reader.ndim == 1,
+                 "cal": reader.cal.copy(),
+                 "live": {"url": source, "interval": interval, "revision": 1,
+                          "server_url": infer_server_url(source),
+                          "paused": False, "connected": True, "error": "",
+                          "last_updated": time.time(), "last_checked": time.time()}}
+        entry["proj"] = entry["proj_x"]
+        self.matrices.append(entry)
+        return entry["index"]
+
+    def refresh_live_histogram(self, force=False):
+        m = self.get_active_matrix()
+        if not m or not m.get("live"):
+            return False
+        live = m["live"]
+        if live["paused"] and not force:
+            return False
+        # Only this explicit refresh mutates data. Tiles and fits never fetch
+        # upstream, and a failed fetch leaves the complete old snapshot intact.
+        try:
+            reader = ROOTHTTPReader(live["url"])
+            previous = m["reader"]
+            if (reader.to_numpy().shape != m["matrix"].shape or reader.cal != previous.cal
+                    or reader.ndim != previous.ndim or reader.axis_labels != previous.axis_labels):
+                raise ValueError("Histogram axes changed. Reconnect to load the new binning.")
+            changed = not np.array_equal(reader.to_numpy(), m["matrix"])
+            live.update(connected=True, error="", last_checked=time.time())
+            m["reader"] = reader
+            if changed:
+                mat = reader.to_numpy()
+                m.update(reader=reader, matrix=mat, proj_x=reader.get_projection(0),
+                         proj_y=reader.get_projection(1), total_counts=float(mat.sum()),
+                         max_count=float(mat.max()), nonzero_bins=int(np.count_nonzero(mat)),
+                         is_symmetric=reader.is_symmetric)
+                m["proj"] = m["proj_x"]
+                live.update(revision=live["revision"] + 1, last_updated=time.time())
+                # Headless gate results are cached; discard their computed data.
+                for axis, gate in self.gates.items():
+                    if gate:
+                        self.gates[axis] = compute_1d_gate(mat, axis, gate.get("valid_w", []), gate.get("valid_b", []))
+            return changed
+        except Exception as exc:
+            live.update(connected=False, error=str(exc), last_checked=time.time())
+            return False
 
     def get_active_matrix(self) -> dict:
         if self.matrices and 0 <= self.active_index < len(self.matrices):
@@ -4278,26 +4364,33 @@ class CMATSession:
     def select_matrix(self, identifier) -> int:
         if not self.matrices:
             raise ValueError("No matrices loaded in session.")
+        def activate(idx):
+            previous = self.get_active_matrix()
+            if previous and previous.get("is_1d", False) != self.matrices[idx].get("is_1d", False):
+                self.gates = {0: None, 1: None}
+                self.fits_1d = {0: None, 1: None}
+                self.search_peaks_1d = {0: [], 1: []}
+                self.bg_regions_1d = {0: [], 1: []}
+                self.integration_1d = {0: None, 1: None}
+                self.fit_2d = None
+            self.active_index = idx
+            return idx
         try:
             val = int(identifier)
             if 0 <= val < len(self.matrices):
-                self.active_index = val
-                return val
+                return activate(val)
             elif 1 <= val <= len(self.matrices):
-                self.active_index = val - 1
-                return val - 1
+                return activate(val - 1)
         except ValueError:
             pass
 
         ident_str = str(identifier).strip().lower()
         for idx, m in enumerate(self.matrices):
             if m["name"].lower() == ident_str or m["filename"].lower() == ident_str:
-                self.active_index = idx
-                return idx
+                return activate(idx)
         for idx, m in enumerate(self.matrices):
             if ident_str in m["name"].lower() or ident_str in m["filename"].lower():
-                self.active_index = idx
-                return idx
+                return activate(idx)
         raise KeyError(f"Matrix '{identifier}' not found in loaded matrices.")
 
     def close_matrix(self, identifier=None) -> None:
@@ -4340,6 +4433,9 @@ class CMATSession:
                 m["cal"][axis] = list(c)
 
     def is_calibrated(self, axis: int = 0) -> bool:
+        m = self.get_active_matrix()
+        if m and isinstance(m.get("reader"), ROOTMatrixReader) and int(axis) in m["reader"].cal:
+            return True
         return is_calibrated_coeffs(self.get_cal(axis))
 
     def get_spectrum(self, axis: int = 0) -> np.ndarray:
@@ -4504,7 +4600,7 @@ class CMATCommandInterpreter:
         print(" python-cmat Analysis Commands Reference:")
         print(bar)
         print("  Matrix & Session:")
-        print("    load <path> [alias]                 Load .cmat matrix file into session")
+        print("    load <path> [alias]                 Load .cmat or ROOT TH1/TH2 into session")
         print("    matrix <name_or_index>              Select active matrix for analysis")
         print("    list                                List all loaded matrices with indices and counts")
         print("    info                                Display active matrix metadata and calibrations")
@@ -4544,7 +4640,7 @@ class CMATCommandInterpreter:
         print("    export_amat <out.mat>               Export 2D matrix to ASCII matrix format")
         print()
         print("  Lifetime & Half-Life Fitting:")
-        print("    halflife <axis|file.dat> [--t12 V] [--fwhm V] [--centroid V] [--bg V] [--range min max] [--scan-bg] [--out f.fit] [--pdf f.pdf]")
+        print("    halflife <axis|file.dat> [--model convolved|exponential] [--t12 V] [--fwhm V] [--centroid V] [--bg V] [--range min max] [--scan-bg] [--out f.fit] [--pdf f.pdf]")
         print()
         print("  Scripting & Control:")
         print("    macro <filepath>                    Execute commands from macro script file")
@@ -4649,15 +4745,15 @@ class CMATCommandInterpreter:
             return
         path_str = args[0]
         alias = args[1] if len(args) > 1 else None
-        p = Path(path_str)
+        p, obj_name = split_matrix_spec(path_str)
         if not p.exists():
-            p_alt = Path(__file__).resolve().parent / path_str
+            p_alt = Path(__file__).resolve().parent / p
             if p_alt.exists():
                 p = p_alt
             else:
                 print(f"[!] Error: File '{path_str}' not found.", file=sys.stderr)
                 return
-        idx = self.session.add_matrix_file(p, name=alias)
+        idx = self.session.add_matrix_file(matrix_spec(p, obj_name), name=alias)
         self.session.active_index = idx
         m = self.session.matrices[idx]
         print(f"[*] Loaded [{idx + 1}] '{m['name']}' ({m['shape'][0]}×{m['shape'][1]}, {m['total_counts']:,} counts, symmetric={m['is_symmetric']})")
@@ -5224,7 +5320,9 @@ class CMATCommandInterpreter:
 
         pdf_bytes = generate_pdf_1d(
             spec, ch_start, ch_end, is_log=is_log, zoom_y=zoom_y, fit_res=fit_res,
-            cal=self.session.get_cal(axis), title=title, grid_mode=grid_mode, peaks=peaks
+            cal=self.session.get_cal(axis), title=title, grid_mode=grid_mode, peaks=peaks,
+            force_calibrated=self.session.is_calibrated(axis),
+            channel_offset=0.5 if isinstance(self.session.get_active_matrix()["reader"], ROOTMatrixReader) else 0.0
         )
         outfile.parent.mkdir(parents=True, exist_ok=True)
         outfile.write_bytes(pdf_bytes)
@@ -5295,7 +5393,10 @@ class CMATCommandInterpreter:
         hdr = f"Matrix: {m['name'] if m else 'unknown'} | Det {axis + 1} ({'X' if axis == 0 else 'Y'})"
         if is_gated:
             hdr += f" | Gated Coincidence Cut | BG scale: {bg_scale:.4f}"
-        export_1d_ascii(outfile, spec, cal=self.session.get_cal(axis), header=hdr, is_gated=is_gated, bg_scale=bg_scale)
+        is_root = bool(m and isinstance(m["reader"], ROOTMatrixReader))
+        export_1d_ascii(outfile, spec, cal=self.session.get_cal(axis), header=hdr, is_gated=is_gated,
+                        bg_scale=bg_scale, force_calibrated=self.session.is_calibrated(axis),
+                        channel_offset=0.5 if is_root else 0.0)
         print(f"[+] Exported 1D spectrum data: {outfile.resolve()}")
 
     def cmd_export_amat(self, args: list):
@@ -5343,9 +5444,10 @@ class CMATCommandInterpreter:
             is_gated = gate is not None and bool(gate.get("w_gates"))
             bg_scale = gate.get("scale", 0.0) if is_gated else 0.0
             
-            if "energy" in flags and is_calibrated_coeffs(cal):
-                x_arr = np.array([ch_to_energy(ch, cal) for ch in range(len(spec))], dtype=np.float64)
-                x_label = "Energy (keV)"
+            is_root = bool(m and isinstance(m["reader"], ROOTMatrixReader))
+            if (is_root or (("energy" in flags or "calibrated" in flags) and is_calibrated_coeffs(cal))) and "channel" not in flags:
+                x_arr = np.array([ch_to_energy(ch + (0.5 if is_root else 0.0), cal) for ch in range(len(spec))], dtype=np.float64)
+                x_label = m["reader"].axis_labels.get(axis, "ROOT axis coordinate") if is_root else "Energy (keV)"
             else:
                 x_arr = np.arange(len(spec), dtype=np.float64)
                 x_label = "Channel"
@@ -5377,6 +5479,7 @@ class CMATCommandInterpreter:
                 print(f"[!] Warning: Compression failed: {e}", file=sys.stderr)
 
         t12 = float(flags["t12"]) if "t12" in flags else None
+        model = str(flags.get("model", "convolved"))
         fwhm = float(flags["fwhm"]) if "fwhm" in flags else None
         centroid = float(flags["centroid"]) if "centroid" in flags else None
         scale = float(flags["scale"]) if "scale" in flags else None
@@ -5399,6 +5502,9 @@ class CMATCommandInterpreter:
                 except ValueError:
                     pass
 
+        fitter.model = model
+        if fit_range is not None:
+            fitter.active_range = fit_range
         if "scan-bg" in flags or "scan_bg" in flags:
             print(f"[*] Exploring background chi^2 profile on '{source_name}'...")
             fitter.scan_background(apply_best=True)
@@ -5410,7 +5516,8 @@ class CMATCommandInterpreter:
             scale=scale,
             bg=bg,
             freepars=freepars,
-            fit_range=fit_range
+            fit_range=fit_range,
+            model=model
         )
 
         bar = "═" * 60
@@ -5424,7 +5531,9 @@ class CMATCommandInterpreter:
         bg_s = f"+/- {res['bg_err']:.2f}" if freepars[4] else "(FIXED / not fitted)"
 
         print(f"  Half-Life (t_1/2) : {res['t12']:9.3f} {t12_s} {fitter.spec.x_label}")
-        print(f"  Prompt FWHM       : {res['fwhm']:9.3f} {fwhm_s} {fitter.spec.x_label}")
+        print(f"  Model             : {res['model']}")
+        if res['model'] != 'exponential':
+            print(f"  Prompt FWHM       : {res['fwhm']:9.3f} {fwhm_s} {fitter.spec.x_label}")
         print(f"  Centroid          : {res['centroid']:9.2f} {cent_s}")
         print(f"  Scaling Factor    : {res['scale']:9.2f} {scale_s}")
         print(f"  Background Level  : {res['bg']:9.2f} {bg_s}")
@@ -5569,7 +5678,8 @@ def browse_filesystem(req_path: str = "") -> dict:
                         if entry.name.startswith("."):
                             continue
                         is_dir = entry.is_dir(follow_symlinks=True)
-                        is_cmat = (not is_dir) and entry.name.lower().endswith(".cmat")
+                        is_cmat = (not is_dir) and entry.name.lower().endswith((".cmat", ".root"))
+                        is_root_matrix = (not is_dir) and entry.name.lower().endswith(".root")
                         is_txt = (not is_dir) and entry.name.lower().endswith(".txt")
                         is_fit = (not is_dir) and (entry.name.lower().startswith("fit_results") or (is_txt and "fit" in entry.name.lower()))
                         size = 0
@@ -5587,6 +5697,7 @@ def browse_filesystem(req_path: str = "") -> dict:
                             "path": str(Path(entry.path).resolve()),
                             "is_dir": is_dir,
                             "is_cmat": is_cmat,
+                            "is_root_matrix": is_root_matrix,
                             "is_txt": is_txt,
                             "is_fit": is_fit,
                             "size": size,
@@ -5630,6 +5741,8 @@ def browse_filesystem(req_path: str = "") -> dict:
 
 class CMATWebHandler(BaseHTTPRequestHandler):
     session: "CMATSession" = None
+    pending_root_files: list = []
+    pending_live_server: str = ""
     matrices: list = []
     active_index: int = 0
     reader: CMATReader = None
@@ -5686,9 +5799,12 @@ class CMATWebHandler(BaseHTTPRequestHandler):
     def get_metadata_dict(self):
         info = self.reader.get_info() if self.reader else {}
         active_mat = self.active_matrix_data
+        info["source_format"] = "ROOT" if isinstance(self.reader, ROOTMatrixReader) else ("GASP" if active_mat else None)
         if active_mat:
             info["filename"] = active_mat["name"]
             info["filepath"] = active_mat["path"]
+            info["is_1d"] = active_mat.get("is_1d", False)
+            info["live"] = active_mat.get("live")
         session = self.get_session()
         c0 = session.get_cal(0)
         c1 = session.get_cal(1)
@@ -5703,13 +5819,16 @@ class CMATWebHandler(BaseHTTPRequestHandler):
         }
         info["is_calibrated_0"] = session.is_calibrated(0)
         info["is_calibrated_1"] = session.is_calibrated(1)
+        info["pending_root_files"] = list(self.pending_root_files)
+        info["pending_live_server"] = self.pending_live_server
+        info["live_browser_url"] = session.live_browser_url
         info["config"] = self.config or DEFAULT_CONFIG
         info["config_file"] = self.config_path.name if self.config_path else CONFIG_FILENAME
         if self.matrix is not None:
             info["shape"] = [self.matrix.shape[1], self.matrix.shape[0]]
             info["shape_yx"] = [self.matrix.shape[0], self.matrix.shape[1]]
-            info["max_count"] = int(np.max(self.matrix))
-            info["total_counts"] = int(np.sum(self.matrix))
+            info["max_count"] = float(np.max(self.matrix))
+            info["total_counts"] = float(np.sum(self.matrix))
             info["nonzero_bins"] = int(np.count_nonzero(self.matrix))
         else:
             info["max_count"] = 0
@@ -5727,6 +5846,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 "max_count": m["max_count"],
                 "nonzero_bins": m["nonzero_bins"],
                 "is_symmetric": m["is_symmetric"],
+                "is_1d": m.get("is_1d", False),
                 "cal_0": m.get("cal", {}).get(0, c0) if isinstance(m.get("cal"), dict) else c0,
                 "cal_1": m.get("cal", {}).get(1, c1) if isinstance(m.get("cal"), dict) else c1,
             }
@@ -5737,7 +5857,52 @@ class CMATWebHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def send_json(self, payload, status=200):
+        self.send_response(status)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+    def end_headers(self):
+        if self.path.startswith("/api/"):
+            self.send_header("Cache-Control", "no-store")
+        m = self.get_active_matrix()
+        if m and m.get("live"):
+            self.send_header("X-Data-Revision", str(m["live"]["revision"]))
+        super().end_headers()
+
+    def dispatch_cube(self, method):
+        """Mount the 3D viewer on /cube using the same server and ROOT catalog."""
+        if self.path != "/cube" and not self.path.startswith("/cube/"):
+            return False
+        original_path = self.path
+        subpath = self.path[len("/cube"):] or "/"
+        # Discovery and selection are shared across both views.
+        if subpath.split("?", 1)[0] in ("/api/live_histograms", "/api/live_connect"):
+            self.path = subpath
+            try:
+                getattr(self, method)()
+            finally:
+                self.path = original_path
+            return True
+        cube_session = self.get_session().cube_session
+        if cube_session is None:
+            self.send_error(404, "Select a TH3 histogram from the histogram browser first")
+            return True
+        from cmat3d_webviewer import CMAT3DWebHandler
+        # Delegate this request without constructing a second socket handler.
+        cube_handler = CMAT3DWebHandler.__new__(CMAT3DWebHandler)
+        cube_handler.__dict__ = self.__dict__.copy()
+        cube_handler.path = subpath
+        cube_handler.api_prefix = "/cube"
+        cube_handler.get_session = lambda: cube_session
+        with cube_session.snapshot_lock:
+            getattr(cube_handler, method)()
+        return True
+
     def do_GET(self):
+        if self.dispatch_cube("do_GET"):
+            return
         if self.path == "/" or self.path.startswith("/index"):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
@@ -5751,6 +5916,17 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "shutting_down"}).encode("utf-8"))
             print("\n[*] Quit request received from browser. Server shutting down gracefully...\n", flush=True)
             threading.Timer(0.15, lambda: os._exit(0)).start()
+
+        elif self.path.startswith("/api/live_histograms"):
+            from urllib.parse import urlparse, parse_qs
+            try:
+                url = parse_qs(urlparse(self.path).query).get("url", [""])[0]
+                url = normalize_url(url)
+                details = list_http_histograms(url)
+                self.get_session().live_browser_url = url
+                self.send_json({"details": details, "server_url": url})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
 
         elif self.path == "/api/metadata":
             self.send_response(200)
@@ -5768,6 +5944,23 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(res_data).encode("utf-8"))
+
+        elif self.path.startswith("/api/root_histograms"):
+            from urllib.parse import urlparse, parse_qs
+            req_path = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+            try:
+                path = Path(req_path).expanduser().resolve()
+                if path.suffix.lower() != ".root":
+                    raise ValueError("Expected a .root file")
+                details = describe_root_histograms(path)
+                payload = {"histograms": [entry["name"] for entry in details], "details": details}
+                status = 200
+            except Exception as exc:
+                payload, status = {"error": str(exc)}, 400
+            self.send_response(status)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
 
         elif self.path.startswith("/api/select_matrix"):
             from urllib.parse import urlparse, parse_qs
@@ -6260,7 +6453,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             x = max(0, min(self.matrix.shape[1] - 1, int(float(query.get("x", [0])[0]))))
             y = max(0, min(self.matrix.shape[0] - 1, int(float(query.get("y", [0])[0]))))
-            val = int(self.matrix[y, x])
+            val = float(self.matrix[y, x])
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
@@ -6282,7 +6475,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
 
             # Exact pixel-matched downsampling or 1:1 slice
             if sh_x <= target_w and sh_y <= target_h:
-                out = np.ascontiguousarray(sub, dtype=np.int32)
+                out = np.ascontiguousarray(sub, dtype="<f8")
             else:
                 step_x = max(1, int(np.ceil(sh_x / target_w)))
                 step_y = max(1, int(np.ceil(sh_y / target_h)))
@@ -6299,13 +6492,14 @@ class CMATWebHandler(BaseHTTPRequestHandler):
 
                 # 2D Max pooling preserves all gamma coincidence peaks
                 out = sub_padded.reshape(new_h, step_y, new_w, step_x).max(axis=(1, 3))
-                out = np.ascontiguousarray(out[:target_h, :target_w], dtype=np.int32)
+                out = np.ascontiguousarray(out[:target_h, :target_w], dtype="<f8")
 
             actual_h, actual_w = out.shape
             self.send_response(200)
             self.send_header("Content-type", "application/octet-stream")
             self.send_header("X-Shape-W", str(actual_w))
             self.send_header("X-Shape-H", str(actual_h))
+            self.send_header("X-Data-Type", "float64")
             self.send_header("X-Slice-X0", str(x0))
             self.send_header("X-Slice-X1", str(x1))
             self.send_header("X-Slice-Y0", str(y0))
@@ -6426,7 +6620,9 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     fits_list=fits_list,
                     cal=axis_cal,
                     grid_mode=grid_mode,
-                    peaks=peaks
+                    peaks=peaks,
+                    force_calibrated=session.is_calibrated(axis),
+                    channel_offset=0.5 if isinstance(self.reader, ROOTMatrixReader) else 0.0
                 )
                 self.send_response(200)
                 self.send_header("Content-type", "application/pdf")
@@ -6735,7 +6931,10 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             bg_scale = gate.get("scale", 0.0) if is_gated else 0.0
 
             x_arr = np.arange(len(spec), dtype=np.float64)
-            x_energy = np.array([ch_to_energy(ch, cal) for ch in range(len(spec))], dtype=np.float64) if is_calibrated_coeffs(cal) else None
+            is_root = bool(m and isinstance(m["reader"], ROOTMatrixReader))
+            x_energy = np.array([ch_to_energy(ch + (0.5 if is_root else 0.0), cal) for ch in range(len(spec))], dtype=np.float64) if (is_root or session.is_calibrated(axis)) else None
+            physical_label = m["reader"].axis_labels.get(axis, "ROOT axis coordinate") if is_root else "Energy (keV)"
+            physical_unit = m["reader"].axis_units.get(axis, "axis units") if is_root else "keV"
 
             if is_gated and bg_scale > 0:
                 dy_arr = np.sqrt(np.maximum(np.abs(spec), 1.0) * (1.0 + bg_scale))
@@ -6754,6 +6953,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 "y": spec.tolist(),
                 "dy": dy_arr.tolist(),
                 "x_energy": x_energy.tolist() if x_energy is not None else None,
+                "x_axis_label": physical_label,
+                "x_unit": physical_unit,
                 "header_lines": hdr,
                 "is_gated": is_gated,
                 "bg_scale_factor": bg_scale,
@@ -6770,7 +6971,12 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             fn = query.get("file", ["spectrum.dat"])[0].strip()
             t12 = max(0.0, float(query.get("t12", [20.0])[0]))
+            model = query.get("model", ["convolved"])[0]
+            if model not in ("convolved", "exponential"):
+                model = "convolved"
             fwhm = float(query.get("fwhm", [15.0])[0])
+            if model == "exponential":
+                fwhm = 0.0
             centroid = float(query.get("centroid", [0.0])[0])
             scale = float(query.get("scale", [1000.0])[0])
             bg = float(query.get("bg", [0.0])[0])
@@ -6778,6 +6984,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             r1 = float(query.get("r1", [0.0])[0])
             t12_err = float(query.get("t12_err", [0.0])[0])
             fwhm_err = float(query.get("fwhm_err", [0.0])[0])
+            if model == "exponential":
+                fwhm_err = 0.0
             centroid_err = float(query.get("centroid_err", [0.0])[0])
             scale_err = float(query.get("scale_err", [0.0])[0])
             bg_err = float(query.get("bg_err", [0.0])[0])
@@ -6843,6 +7051,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 chisq_total = float(np.sum(residuals_full[fit_mask] ** 2))
                 result = {
                     "success": True,
+                    "model": model,
                     "t12": t12,
                     "t12_err": t12_err,
                     "fwhm": fwhm,
@@ -6899,6 +7108,60 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_POST(self):
+        if hasattr(self, "dispatch_cube") and self.dispatch_cube("do_POST"):
+            return
+        if self.path in ("/api/live_connect", "/api/live_refresh", "/api/live_control"):
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                session = self.get_session()
+                changed = False
+                if self.path == "/api/live_connect":
+                    interval = float(data.get("interval", 2))
+                    if not math.isfinite(interval) or not 0.5 <= interval <= 300:
+                        raise ValueError("Refresh interval must be between 0.5 and 300 seconds")
+                    server_url = normalize_url(data.get("server_url") or infer_server_url(data.get("url", "")))
+                    if str(data.get("type", "")).startswith("TH3"):
+                        from cmat3d_webviewer import MatrixSession3D
+                        cube_session = session.cube_session or MatrixSession3D(session.config)
+                        cube_session.add_root_cube(data.get("url", ""), max(1.0, interval))
+                        session.cube_session = cube_session
+                        session.live_browser_url = server_url
+                        CMATWebHandler.pending_live_server = ""
+                        self.send_json({"viewer_url": "/cube/"})
+                        return
+                    idx = session.add_live_histogram(data.get("url", ""), interval)
+                    session.select_matrix(idx)
+                    session.matrices[idx]["live"].update(interval=interval, paused=False)
+                    session.matrices[idx]["live"]["server_url"] = server_url
+                    session.live_browser_url = server_url
+                    CMATWebHandler.pending_live_server = ""
+                    changed = True
+                elif self.path == "/api/live_control":
+                    m = session.get_active_matrix()
+                    if not m or not m.get("live"):
+                        raise ValueError("No active live histogram")
+                    if "paused" in data:
+                        m["live"]["paused"] = bool(data["paused"])
+                    if "interval" in data:
+                        interval = float(data["interval"])
+                        if not math.isfinite(interval) or not 0.5 <= interval <= 300:
+                            raise ValueError("Refresh interval must be between 0.5 and 300 seconds")
+                        m["live"]["interval"] = interval
+                else:
+                    if data.get("index", session.active_index) != session.active_index:
+                        self.send_json({"changed": False, "metadata": self.get_metadata_dict()})
+                        return
+                    m = session.get_active_matrix()
+                    interval = float(data.get("interval", 2))
+                    if m and m.get("live") and math.isfinite(interval) and 0.5 <= interval <= 300:
+                        m["live"]["interval"] = interval
+                    changed = session.refresh_live_histogram(force=bool(data.get("force", False)))
+                CMATWebHandler.sync_class_attrs()
+                self.send_json({"changed": changed, "metadata": self.get_metadata_dict(), "viewer_url": "/"})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 400)
+            return
+
         if self.path == "/api/save_config":
             try:
                 content_len = int(self.headers.get("Content-Length", 0))
@@ -6928,7 +7191,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             filename = query.get("filename", ["uploaded_matrix.cmat"])[0]
             safe_name = Path(filename).name
-            if not safe_name.endswith(".cmat"):
+            if not safe_name.lower().endswith((".cmat", ".root")):
                 safe_name += ".cmat"
 
             content_len = int(self.headers.get("Content-Length", 0))
@@ -6953,7 +7216,8 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     bytes_read += len(chunk)
 
             try:
-                new_idx = CMATWebHandler.add_matrix_file(target_path, name=safe_name, cal=self.cal)
+                upload_cal = None if target_path.suffix.lower() == ".root" else self.cal
+                new_idx = CMATWebHandler.add_matrix_file(target_path, name=safe_name, cal=upload_cal)
                 CMATWebHandler.active_index = new_idx
                 CMATWebHandler.sync_class_attrs()
                 m = CMATWebHandler.matrices[new_idx]
@@ -6980,7 +7244,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 if not path_str:
                     raise ValueError("No path provided")
 
-                target_path = Path(path_str).expanduser()
+                target_path, object_name = split_matrix_spec(path_str)
                 if not target_path.is_absolute():
                     target_path = (Path.cwd() / target_path).resolve()
                 else:
@@ -6989,7 +7253,9 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 if not target_path.exists():
                     raise FileNotFoundError(f"Matrix file not found: {target_path}")
 
-                new_idx = CMATWebHandler.add_matrix_file(target_path, cal=self.cal)
+                path_cal = None if target_path.suffix.lower() == ".root" else self.cal
+                new_idx = CMATWebHandler.add_matrix_file(matrix_spec(target_path, object_name), cal=path_cal)
+                CMATWebHandler.pending_root_files = [p for p in CMATWebHandler.pending_root_files if Path(p) != target_path]
                 CMATWebHandler.active_index = new_idx
                 CMATWebHandler.sync_class_attrs()
                 m = CMATWebHandler.matrices[new_idx]
@@ -7018,6 +7284,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 y_arr = np.array(data["y"], dtype=np.float64)
                 dy_arr = np.array(data["dy"], dtype=np.float64) if "dy" in data else None
                 fitter.set_data(x_arr, y_arr, dy=dy_arr)
+                fitter.spec.x_label = str(data.get("x_label", "Channel"))
 
                 fit_range = tuple(data["fit_range"]) if ("fit_range" in data and data["fit_range"]) else None
                 freepars = data.get("freepars", [True, True, True, True, True])
@@ -7029,8 +7296,11 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     scale=data.get("scale"),
                     bg=data.get("bg"),
                     freepars=freepars,
-                    fit_range=fit_range
+                    fit_range=fit_range,
+                    model=data.get("model", "convolved")
                 )
+                res["x_label"] = fitter.spec.x_label
+                res["x_unit"] = str(data.get("x_unit", fitter.spec.x_label))
 
                 self.send_response(200)
                 self.send_header("Content-type", "application/json")
@@ -7053,6 +7323,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 y_arr = np.array(data["y"], dtype=np.float64)
                 dy_arr = np.array(data["dy"], dtype=np.float64) if "dy" in data else None
                 fitter.set_data(x_arr, y_arr, dy=dy_arr)
+                fitter.spec.x_label = str(data.get("x_label", "Channel"))
 
                 fit_range = tuple(data["fit_range"]) if ("fit_range" in data and data["fit_range"]) else None
                 fitter.active_range = fit_range
@@ -7064,6 +7335,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     float(data.get("bg", 0.0))
                 ]
                 fitter.freepars = data.get("freepars", [True, True, True, True, True])
+                fitter.model = data.get("model", "convolved")
 
                 b_min = float(data["b_min"]) if "b_min" in data else None
                 b_max = float(data["b_max"]) if "b_max" in data else None
@@ -7081,6 +7353,46 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
 
+        elif self.path == "/api/halflife/export_pdf":
+            import tempfile
+            from halflife import HalfLifeFitter, parse_limit_pair
+            tmp_pdf_path = None
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                result = data["fit"]
+                fitter = HalfLifeFitter()
+                fitter.set_data(
+                    np.asarray(result["x_eval"], dtype=np.float64),
+                    np.asarray(result["y_data"], dtype=np.float64),
+                    dy=np.asarray(result["dy_data"], dtype=np.float64),
+                    x_label=str(data.get("x_label", "Channel")),
+                )
+                filename = Path(str(data.get("filename", "spectrum.dat"))).name
+                fitter.spec.filename = filename
+                fitter.last_fit_result = result
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp_pdf_path = Path(tmp.name)
+                fitter.export_plot(
+                    tmp_pdf_path,
+                    log_scale=bool(data.get("log", False)),
+                    xlim=parse_limit_pair(json.dumps(data.get("xlim"))),
+                    ylim=parse_limit_pair(json.dumps(data.get("ylim"))),
+                )
+                pdf_bytes = tmp_pdf_path.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-type", "application/pdf")
+                self.send_header("Content-Disposition", f'attachment; filename="{Path(filename).stem}_halflife_fit.pdf"')
+                self.end_headers()
+                self.wfile.write(pdf_bytes)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
+            finally:
+                if tmp_pdf_path is not None:
+                    tmp_pdf_path.unlink(missing_ok=True)
+
         elif self.path == "/api/halflife/compress":
             content_len = int(self.headers.get("Content-Length", 0))
             body_bytes = self.rfile.read(content_len)
@@ -7092,6 +7404,7 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 y_arr = np.array(data["y"], dtype=np.float64)
                 dy_arr = np.array(data["dy"], dtype=np.float64) if "dy" in data else None
                 fitter.set_data(x_arr, y_arr, dy=dy_arr)
+                fitter.spec.x_label = str(data.get("x_label", "Channel"))
                 fitter.spec.filename = data.get("filename", "compressed")
 
                 factor = int(data.get("factor", 2))
@@ -7103,7 +7416,9 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                     "x": new_spec.x.tolist(),
                     "y": new_spec.y.tolist(),
                     "dy": new_spec.dy.tolist(),
-                    "x_energy": None,
+                    "x_energy": new_spec.x.tolist() if data.get("x_unit", "channels") != "channels" else None,
+                    "x_axis_label": new_spec.x_label,
+                    "x_unit": str(data.get("x_unit", "channels")),
                     "is_gated": False,
                     "bg_scale_factor": 0.0,
                     "x_label": new_spec.x_label
@@ -7143,8 +7458,14 @@ def main():
         nargs="*",
         type=str,
         default=[],
-        help="Path to one or more input .cmat file(s) (e.g. run1.cmat run2.cmat or *.cmat)",
+        help="Input .cmat or ROOT file(s); for ROOT files with several histograms, choose in the browser or use file.root::directory/hist",
     )
+    parser.add_argument("--live", action="append", default=[], metavar="HISTOGRAM_URL",
+                        help="Connect to a ROOT HTTP histogram URL (repeat for multiple histograms)")
+    parser.add_argument("--live-server", default="", metavar="SERVER_URL",
+                        help="Start with the live ROOT server histogram browser")
+    parser.add_argument("--live-interval", type=float, default=2.0,
+                        help="Live refresh interval in seconds, 0.5–300 (default: 2)")
     parser.add_argument(
         "-m", "--macro",
         type=str,
@@ -7225,27 +7546,31 @@ def main():
     )
 
     args = parser.parse_args()
+    if not math.isfinite(args.live_interval) or not 0.5 <= args.live_interval <= 300:
+        parser.error("--live-interval must be between 0.5 and 300 seconds")
 
     # Expand any globs/wildcards in input arguments
     file_paths = []
     for item in args.input:
         matched = glob.glob(item)
         if matched:
-            file_paths.extend([Path(p) for p in sorted(matched)])
+            file_paths.extend(sorted(matched))
         else:
-            file_paths.append(Path(item))
+            file_paths.append(item)
 
     # De-duplicate while preserving CLI order
     seen = set()
     unique_paths = []
     for p in file_paths:
-        res = p.resolve()
+        raw_path, object_name = split_matrix_spec(p)
+        res = matrix_spec(raw_path, object_name)
         if res not in seen:
             seen.add(res)
             unique_paths.append(p)
 
     for p in unique_paths:
-        if not p.exists():
+        source_path, _ = split_matrix_spec(p)
+        if not source_path.exists():
             print(f"Error: File '{p}' not found.", file=sys.stderr)
             sys.exit(1)
 
@@ -7264,12 +7589,35 @@ def main():
     if args.cal_1 is not None:
         session.set_cal(1, args.cal_1)
 
-    # Pre-load matrices if provided
+    # In web mode, defer ROOT files with multiple histograms until the browser
+    # picker selects an object; there is no need to load an arbitrary TH2 first.
+    explicit_cal = {}
+    if args.cal is not None:
+        explicit_cal = {0: args.cal, 1: args.cal}
+    if args.cal_0 is not None:
+        explicit_cal[0] = args.cal_0
+    if args.cal_1 is not None:
+        explicit_cal[1] = args.cal_1
+    is_headless_mode = bool(args.macro or args.command or args.headless)
+    pending_root_files = []
     for p in unique_paths:
-        session.add_matrix_file(p)
+        raw_path, object_name = split_matrix_spec(p)
+        if not is_headless_mode and raw_path.suffix.lower() == ".root" and object_name is None:
+            names = list_root_histograms(raw_path)
+            if not names:
+                parser.error(f"No TH1 or TH2 histograms found in {raw_path}")
+            if len(names) > 1:
+                pending_root_files.append(str(raw_path.resolve()))
+                continue
+        session.add_matrix_file(p, cal=explicit_cal or None)
+
+    for url in args.live:
+        try:
+            session.add_live_histogram(url, args.live_interval)
+        except Exception as exc:
+            parser.error(f"Could not connect to live histogram: {exc}")
 
     # Check for Headless Mode: Macro, Batch Command, or Interactive REPL
-    is_headless_mode = bool(args.macro or args.command or args.headless)
 
     if is_headless_mode:
         interpreter = CMATCommandInterpreter(session)
@@ -7299,7 +7647,7 @@ def main():
         sys.exit(0 if success else 1)
 
     # Otherwise: Web Viewer Mode
-    if not unique_paths:
+    if not unique_paths and not args.live and not args.live_server:
         # Check if default GeE-symm.cmat exists in cwd
         def_file = Path.cwd() / "GeE-symm.cmat"
         if def_file.exists():
@@ -7329,6 +7677,8 @@ def main():
         ssh_browser_skipped = False
 
     CMATWebHandler.session = session
+    CMATWebHandler.pending_root_files = pending_root_files
+    CMATWebHandler.pending_live_server = args.live_server
     CMATWebHandler.config = config
     CMATWebHandler.config_path = config_path
     CMATWebHandler.sync_class_attrs()
@@ -7336,6 +7686,8 @@ def main():
     print(f"[*] Loaded {len(session.matrices)} matrix file{'s' if len(session.matrices) > 1 else ''}:")
     for idx, m in enumerate(session.matrices):
         print(f"    [{idx + 1}/{len(session.matrices)}] '{m['name']}' ({m['shape'][0]}×{m['shape'][1]}, {m['total_counts']:,} counts)")
+    for path in pending_root_files:
+        print(f"    [choose in browser] {path}")
 
     # Bind HTTP server
     bind_host = "" if host in ("0.0.0.0", "", "::") else host

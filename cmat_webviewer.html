@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GASPware 2D Matrix Interactive Viewer</title>
+<title>GASP visualiser</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
   body {
@@ -348,6 +348,9 @@
     overflow: hidden;
   }
   .panel-1d canvas { width: 100%; height: 100%; flex: 1 1 0px; min-height: 0; background: #111; border-radius: 4px; cursor: crosshair; display: block; }
+  body.one-dimensional .two-d-only { display: none !important; }
+  body.one-dimensional .panel-1d-container { flex: 1; }
+  body.one-dimensional #panel1DX { flex: 1 1 auto; height: auto; }
   .panel-1d-header { display: flex; justify-content: space-between; align-items: stretch; gap: 6px; margin-bottom: 3px; min-width: 0; }
   .panel-1d-title-group { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
   .panel-1d-title { font-size: 0.78rem; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -719,7 +722,7 @@
 <header>
   <div class="title">
     <button id="btnToggleSidebar" class="btn-sidebar-toggle" title="Toggle Sidebar Menu [M]">Menu</button>
-    <span>GASPware Visualizer</span>
+    <span id="viewerBrand">GASP visualiser</span>
   </div>
 
   <div class="matrix-bar">
@@ -741,7 +744,7 @@
     <!-- 0. Matrix Comparison & Active File -->
     <div class="control-group" id="groupMatrixManager">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-        <h3 style="margin: 0; color: #ffd600;">Active Matrix</h3>
+        <h3 style="margin: 0; color: #ffd600;">Active File</h3>
         <div style="display: flex; align-items: center; gap: 6px;">
           <span id="matrixCountBadge" class="badge" style="background:#263238; color:#ffd600; font-size:0.7rem;">1 / 1</span>
           <button id="btnHideSidebarTop" class="mini-btn-collapse" title="Collapse Menu [M]">&lt; Hide</button>
@@ -758,6 +761,34 @@
         <button id="btnSidebarNextMat" class="secondary" title="Next Matrix [ ] ]" style="padding: 4px 6px; font-size: 0.75rem;">Next ] ▶</button>
       </div>
       <button id="btnOpenServerBrowser" class="primary" style="margin-bottom: 4px; background: linear-gradient(135deg, #00897b, #004d40); border: 1px solid #00bfa5; font-size: 0.78rem; padding: 6px 10px; font-weight: 600; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Browse Server Filesystem to Open Matrix [Ctrl+O]">📂 Browse Server Matrices...</button>
+      <button id="btnRootHistograms" class="secondary" style="display:none; margin-bottom: 4px; width:100%; font-size:0.78rem;" title="Choose another TH1 or TH2 from this ROOT file">📊 Browse ROOT Histograms...</button>
+      <div style="border-top:1px solid #333;margin-top:6px;padding-top:8px;font-size:0.75rem;">
+        <label for="liveSourceURL">Live ROOT / c4Root server</label>
+        <input id="liveSourceURL" type="url" placeholder="http://localhost:1111" style="width:100%;box-sizing:border-box;margin:5px 0;" aria-label="ROOT server or histogram URL">
+        <div style="display:flex;gap:5px;align-items:center;">
+          <button id="btnLiveConnect" class="secondary" style="flex:1;">Connect</button>
+          <select id="liveInterval" aria-label="Live refresh interval"><option value="1">1 s</option><option value="2" selected>2 s</option><option value="5">5 s</option><option value="10">10 s</option></select>
+        </div>
+        <div id="liveBrowser" style="display:none;margin-top:8px;border:1px solid #37474f;border-radius:4px;padding:6px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <strong style="flex:1;">Live histograms</strong>
+            <button id="btnLiveListRefresh" class="secondary" style="padding:3px 6px;" title="Discover new histograms on the connected server">Refresh list</button>
+          </div>
+          <div id="liveBrowserServer" style="color:#90caf9;overflow-wrap:anywhere;margin:4px 0;"></div>
+          <input id="liveHistogramSearch" type="search" placeholder="Search histogram names or folders…" aria-label="Search live histograms" style="width:100%;box-sizing:border-box;">
+          <div id="liveBrowserStatus" role="status" style="color:#aaa;margin:4px 0;"></div>
+          <div id="liveHistogramTree" aria-label="Live histogram folders" style="max-height:260px;overflow:auto;"></div>
+        </div>
+        <div id="liveControls" style="display:none;margin-top:6px;">
+          <div id="liveStatus" role="status" style="color:#69f0ae;overflow-wrap:anywhere;"></div>
+          <div style="display:flex;gap:5px;margin:5px 0;">
+            <button id="btnLivePause" class="secondary">Pause updates</button>
+            <button id="btnLiveRefresh" class="secondary">Refresh now</button>
+          </div>
+          <label><input id="liveAutoFit" type="checkbox"> Refit peaks after updates</label>
+          <div style="color:#aaa;margin-top:4px;">Pause for a fixed snapshot. Existing fits remain from their last fit until refitted. Half-life fits run on request.</div>
+        </div>
+      </div>
       <small style="color: #888; font-size: 0.65rem; display: block; margin-top: 5px; line-height: 1.2;">
         💡 Zoom, coincidence gates, and peak fits are locked and automatically re-evaluated across matrices for 1:1 differential analysis.
       </small>
@@ -776,8 +807,8 @@
       <label style="margin-top: 6px;">1D Fit Region <span class="range-val" id="fwhmMultLabel1D">4.0× FWHM</span></label>
       <input type="range" id="fwhmMultSlider1D" min="1.0" max="10.0" step="0.5" value="4.0">
 
-      <label style="margin-top: 6px;">2D ROI Half-Width <span class="range-val" id="roiWidthLabel2D">±16 ch</span></label>
-      <input type="range" id="roiWidthSlider2D" min="6" max="36" step="2" value="16">
+      <label class="two-d-only" style="margin-top: 6px;">2D ROI Half-Width <span class="range-val" id="roiWidthLabel2D">±16 ch</span></label>
+      <input class="two-d-only" type="range" id="roiWidthSlider2D" min="6" max="36" step="2" value="16">
 
       <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #333;">
         <label>Results Verbosity</label>
@@ -814,8 +845,8 @@
     <!-- 4. Color & 1D Projections -->
     <div class="control-group">
       <h3>Color &amp; Projections</h3>
-      <label>Colormap [C]</label>
-      <select id="cmapSelect">
+      <label class="two-d-only">Colormap [C]</label>
+      <select class="two-d-only" id="cmapSelect">
         <option value="turbo" selected>Turbo (Rainbow Pro)</option>
         <option value="viridis">Viridis</option>
         <option value="plasma">Plasma</option>
@@ -825,23 +856,23 @@
         <option value="gray">Grayscale</option>
       </select>
 
-      <label style="margin-top: 6px;">Max Contrast <span class="range-val" id="vmaxLabel">500</span></label>
-      <input type="range" id="vmaxSlider" min="0" max="1000" step="1" value="500">
+      <label class="two-d-only" style="margin-top: 6px;">Max Contrast <span class="range-val" id="vmaxLabel">500</span></label>
+      <input class="two-d-only" type="range" id="vmaxSlider" min="0" max="1000" step="1" value="500">
 
-      <label style="margin-top: 6px;">Min Threshold <span class="range-val" id="vminLabel">1</span></label>
-      <input type="range" id="vminSlider" min="0" max="50" value="1">
+      <label class="two-d-only" style="margin-top: 6px;">Min Threshold <span class="range-val" id="vminLabel">1</span></label>
+      <input class="two-d-only" type="range" id="vminSlider" min="0" max="50" value="1">
 
       <label style="margin-top: 6px;">1D Energy / Channel Range</label>
       <select id="projRangeSelect">
         <option value="synced" selected>Synced with 2D Window Zoom</option>
-        <option value="full">Full 0..4095 Range</option>
+        <option value="full">Full Matrix Range</option>
       </select>
 
       <div style="margin-top: 6px; color: #69f0ae; font-size: 0.78rem;">1D Histogram Gridlines: Major &amp; Minor (Always On)</div>
     </div>
 
     <!-- 4. 1D Coincidence Gating -->
-    <div class="control-group">
+    <div class="control-group two-d-only">
       <h3 style="color: #69f0ae;">1D Coincidence Gating</h3>
       <div id="gateSidebarStatus" style="font-size: 0.72rem; color: #aaa; margin-bottom: 6px; line-height: 1.35;">
         No active gate.<br>
@@ -854,7 +885,7 @@
     </div>
 
     <!-- 4.1 2D Banana ROI (Peak & Bg) -->
-    <div class="control-group">
+    <div class="control-group two-d-only">
       <h3 style="color: #ffd600;">2D Banana ROI (Peak &amp; Bg)</h3>
       <div style="font-size:0.72rem; color:#aaa; line-height:1.3;">
         Draw closed polygon on 2D matrix for area integration and area-normalized background subtraction.
@@ -885,7 +916,7 @@
       <label style="margin-top: 6px;">Search Range</label>
       <select id="peakSearchRangeSelect">
         <option value="visible" selected>Visible Zoom Window</option>
-        <option value="full">Full Spectrum (0..4095)</option>
+        <option value="full">Full Spectrum</option>
       </select>
       <label style="margin-top: 6px;">Expected Peak FWHM (ch) <span class="range-val" id="peakSearchFwhmLabel">4.0</span></label>
       <input type="range" id="peakSearchFwhmSlider" min="1.5" max="15.0" step="0.5" value="4.0">
@@ -903,7 +934,7 @@
     </div>
 
     <!-- 4.3 2D Coincidence Peak Search -->
-    <div class="control-group">
+    <div class="control-group two-d-only">
       <h3 style="color: #ff4081;">2D Coincidence Peak Search</h3>
       <div style="font-size: 0.72rem; color: #aaa; margin-bottom: 6px; line-height: 1.35;">
         Hover on 2D matrix &amp; press <span style="color: #ff4081; font-weight: bold;">[P]</span> to automatically detect coincidence peaks with Compton ridge &amp; scatter rejection.
@@ -947,7 +978,7 @@
   </aside>
 
   <div class="workspace">
-    <div class="panel-2d" id="panel2D" style="position: relative;">
+    <div class="panel-2d two-d-only" id="panel2D" style="position: relative;">
       <!-- Floating Banana ROI Badge -->
       <div class="banana-badge" id="bananaRoiBadge" style="position: absolute; top: 10px; left: 10px; z-index: 10; background: rgba(20,20,20,0.9); border: 1px solid #444;">
         <span id="bananaRoiText">Banana ROI Active</span>
@@ -966,7 +997,7 @@
         </div>
       </div>
     </div>
-    <div class="panel-resizer" id="panelResizer" title="Drag to adjust 2D vs 1D panel width (Double-click to reset)"></div>
+    <div class="panel-resizer two-d-only" id="panelResizer" title="Drag to adjust 2D vs 1D panel width (Double-click to reset)"></div>
     <div class="panel-1d-container">
       <div class="panel-1d" id="panel1DX">
         <div class="panel-1d-header">
@@ -987,7 +1018,7 @@
         </div>
         <canvas id="canvas1dX"></canvas>
       </div>
-      <div class="panel-1d" id="panel1DY">
+      <div class="panel-1d two-d-only" id="panel1DY">
         <div class="panel-1d-header">
           <div class="panel-1d-title-group">
             <span class="panel-1d-title" id="specTitleY" style="color: #ff9800;">Det 2 (Y Projection, Sliced X)</span>
@@ -1148,7 +1179,7 @@
     <tr><td>M / m</td><td>Toggle left menu panel (collapse / expand)</td></tr>
     <tr><td>Drag Divider</td><td>Adjust width of 2D matrix vs 1D projections (double-click to reset)</td></tr>
     <tr><td>[ / ] (Brackets)</td><td>Switch between loaded matrices (prev / next) preserving analysis state</td></tr>
-    <tr><td>Ctrl + O</td><td>Browse server filesystem to select and open .cmat matrix</td></tr>
+    <tr><td>Ctrl + O</td><td>Browse server filesystem to open .cmat or ROOT TH1/TH2</td></tr>
     <tr><td>Q / q</td><td>Quit viewer (close browser tab and stop terminal server)</td></tr>
     <tr><td>Esc / ?</td><td>Close Help / Cancel pending gate / Cancel pending BG region</td></tr>
   </table>
@@ -1176,7 +1207,7 @@
 
   <div id="browserPathInputWrap" style="display: none; margin-bottom: 8px;">
     <div style="display: flex; gap: 6px;">
-      <input type="text" id="browserPathInput" placeholder="/path/to/directory" style="flex: 1; background: #0b0f17; border: 1px solid #00e5ff; color: #fff; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 0.8rem;">
+      <input type="text" id="browserPathInput" placeholder="/path/to/directory or file.root" style="flex: 1; background: #0b0f17; border: 1px solid #00e5ff; color: #fff; padding: 5px 10px; border-radius: 4px; font-family: monospace; font-size: 0.8rem;">
       <button id="btnBrowserPathGo" class="browser-btn" style="background: #0284c7; color: #fff; border-color: #38bdf8;">Go</button>
     </div>
   </div>
@@ -1185,7 +1216,7 @@
     <input type="text" id="browserFilterInput" class="browser-filter-input" placeholder="🔍 Filter matrices by name (e.g. GeE, run, cmat)...">
     <label style="display: flex; align-items: center; gap: 5px; font-size: 0.76rem; color: #cbd5e1; cursor: pointer; user-select: none; white-space: nowrap;">
       <input type="checkbox" id="chkBrowserCmatOnly" checked style="accent-color: #00e5ff; cursor: pointer;">
-      <span>.cmat only</span>
+      <span>Matrix files only</span>
     </label>
   </div>
 
@@ -1215,6 +1246,18 @@
   </div>
 </div>
 <div id="matrixToast" class="matrix-toast" style="display: none;"></div>
+
+<div class="browser-modal-backdrop" id="rootPickerBackdrop"></div>
+<div class="browser-modal" id="rootPickerModal" role="dialog" aria-modal="true" aria-labelledby="rootPickerTitle">
+  <div class="browser-header">
+    <h2 id="rootPickerTitle">Choose ROOT histogram</h2>
+    <button id="rootPickerClose" class="fit-btn-close" title="Close histogram picker">✕</button>
+  </div>
+  <div id="rootPickerPath" style="color:#94a3b8; font-size:0.75rem; overflow-wrap:anywhere; margin-bottom:8px;"></div>
+  <input id="rootPickerFilter" type="search" class="browser-filter-input" placeholder="Filter TH1 / TH2 by name or folder..." aria-label="Filter ROOT histograms" style="margin-bottom:8px;">
+  <div id="rootPickerCount" style="font-size:0.72rem; color:#94a3b8; margin-bottom:6px;"></div>
+  <div id="rootPickerList" class="browser-table-wrap" role="listbox" aria-label="ROOT histograms"></div>
+</div>
 
 <script>
   let metadata = null;
@@ -1593,8 +1636,32 @@
     }, 2500);
   }
 
+  function updateViewerBrand() {
+    const root = metadata?.source_format === 'ROOT' || metadata?.root_histogram || metadata?.live ||
+      (!metadata?.source_format && (metadata?.pending_root_files?.length || metadata?.pending_live_server || metadata?.live_browser_url));
+    const brand = root ? 'ROOT visualiser' : 'GASP visualiser';
+    document.getElementById('viewerBrand').textContent = brand;
+    document.title = brand;
+  }
+
   function updateMatrixUI() {
+    updateViewerBrand();
+    updateLiveUI();
     if (!metadata) return;
+    const rootButton = document.getElementById('btnRootHistograms');
+    if (rootButton) rootButton.style.display = metadata.root_histogram && !metadata.live ? 'block' : 'none';
+    const changedDimension = document.body.classList.contains('one-dimensional') !== Boolean(metadata.is_1d);
+    document.body.classList.toggle('one-dimensional', Boolean(metadata.is_1d));
+    if (changedDimension) {
+      gate1DState = { axis: null, w_gates: [], b_gates: [], pending_w: null, pending_b: null, last_res: null };
+      updateGateUI();
+      clearAllFits();
+      bananaMode = null;
+      bananaPolygonPeak = [];
+      bananaPolygonBg = [];
+      isMouseOver2D = false;
+      currentHoveredPanel = '1d-0';
+    }
     const mats = metadata.matrices || [
       { index: 0, name: metadata.filename, shape: metadata.shape, total_counts: metadata.total_counts, is_symmetric: metadata.is_symmetric }
     ];
@@ -1607,7 +1674,7 @@
       mats.forEach((m, i) => {
         const opt = document.createElement('option');
         opt.value = i;
-        opt.text = `[${i + 1}/${mats.length}] ${m.name} (${m.shape[0]}×${m.shape[1]})`;
+        opt.text = `[${i + 1}/${mats.length}] ${m.name} (${m.is_1d ? m.shape[0] + ' bins' : m.shape[0] + '×' + m.shape[1]})`;
         if (i === activeIdx) opt.selected = true;
         sel.appendChild(opt);
       });
@@ -1624,13 +1691,18 @@
     const sideName = document.getElementById('sideMatName');
     if (sideName) sideName.innerText = cur.name;
     const sideShape = document.getElementById('sideMatShape');
-    if (sideShape) sideShape.innerText = `${cur.shape[0]}×${cur.shape[1]}`;
+    if (sideShape) sideShape.innerText = cur.is_1d ? `${cur.shape[0]} bins` : `${cur.shape[0]}×${cur.shape[1]}`;
     const sideCounts = document.getElementById('sideMatCounts');
     if (sideCounts) sideCounts.innerText = cur.total_counts ? cur.total_counts.toLocaleString() : '-';
     const sideMax = document.getElementById('sideMatMax');
     if (sideMax) sideMax.innerText = cur.max_count !== undefined ? cur.max_count.toLocaleString() : (metadata.max_count ? metadata.max_count.toLocaleString() : '-');
     const sideSymm = document.getElementById('sideMatSymm');
-    if (sideSymm) sideSymm.innerText = cur.is_symmetric ? 'Symmetric' : 'Asymmetric';
+    if (sideSymm) sideSymm.innerText = cur.is_1d ? '1D Spectrum' : (cur.is_symmetric ? 'Symmetric' : 'Asymmetric');
+    document.getElementById('btnSidebarFindPeaksDet2').style.display = cur.is_1d ? 'none' : '';
+    document.getElementById('btnSidebarFitAllPeaksDet2').style.display = cur.is_1d ? 'none' : '';
+    const rangeOptions = document.getElementById('projRangeSelect').options;
+    rangeOptions[0].text = cur.is_1d ? 'Visible Zoom Window' : 'Synced with 2D Window Zoom';
+    rangeOptions[1].text = cur.is_1d ? 'Full Spectrum' : 'Full Matrix Range';
     const countBadge = document.getElementById('matrixCountBadge');
     if (countBadge) countBadge.innerText = `${activeIdx + 1} / ${mats.length}`;
 
@@ -1638,6 +1710,7 @@
     const sideNext = document.getElementById('btnSidebarNextMat');
     if (sidePrev) sidePrev.disabled = (mats.length <= 1);
     if (sideNext) sideNext.disabled = (mats.length <= 1);
+    resizeCanvases();
   }
 
   async function reapplyGates() {
@@ -1754,6 +1827,7 @@
         return;
       }
 
+      const changedDimension = Boolean(metadata && metadata.is_1d) !== Boolean(data.is_1d);
       metadata = data;
       updateMatrixUI();
 
@@ -1773,7 +1847,7 @@
       }
 
       // Re-apply all persistent 1D and 2D fits under new matrix conditions
-      await reapplyAllPersistentFits();
+      if (!changedDimension) await reapplyAllPersistentFits();
 
       render2D();
       renderBoth1DSpectra();
@@ -1933,7 +2007,7 @@
     let cmatCount = 0;
     filtered.forEach(e => { if (e.is_cmat) cmatCount++; });
     if (countBadge) {
-      countBadge.innerText = `${cmatCount} .cmat (${filtered.length} total)`;
+      countBadge.innerText = `${cmatCount} matrices (${filtered.length} total)`;
     }
 
     if (!browserState.isRoot && browserState.parentPath) {
@@ -1953,7 +2027,7 @@
 
     if (filtered.length === 0) {
       const trEmpty = document.createElement('tr');
-      trEmpty.innerHTML = `<td colspan="3" style="text-align: center; color: #64748b; padding: 28px;">No ${browserState.cmatOnly ? '.cmat matrix' : ''} files found in this directory</td>`;
+      trEmpty.innerHTML = `<td colspan="3" style="text-align: center; color: #64748b; padding: 28px;">No ${browserState.cmatOnly ? 'matrix' : ''} files found in this directory</td>`;
       tbody.appendChild(trEmpty);
       return;
     }
@@ -1965,7 +2039,7 @@
 
       let icon = entry.is_dir ? '📁' : (entry.is_cmat ? '⚛️' : '📄');
       let nameStyle = entry.is_dir ? 'font-weight: 600; color: #f8fafc;' : (entry.is_cmat ? 'font-weight: 600; color: #00e5ff;' : 'color: #94a3b8;');
-      let badge = entry.is_cmat ? '<span class="badge" style="background: rgba(0, 229, 255, 0.18); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 0.65rem; padding: 1px 5px; margin-left: 6px;">CMAT</span>' : '';
+      let badge = entry.is_cmat ? `<span class="badge" style="background: rgba(0, 229, 255, 0.18); color: #00e5ff; border: 1px solid rgba(0, 229, 255, 0.4); font-size: 0.65rem; padding: 1px 5px; margin-left: 6px;">${entry.is_root_matrix ? 'ROOT' : 'CMAT'}</span>` : '';
 
       tr.innerHTML = `
         <td class="cell-name">
@@ -2025,7 +2099,7 @@
         btnSubmit.innerText = 'Open Matrix';
       }
     } else {
-      if (lbl) lbl.innerText = `${ent.name} (Not a .cmat matrix)`;
+      if (lbl) lbl.innerText = `${ent.name} (Not a .cmat or .root matrix)`;
       if (btnSubmit) {
         btnSubmit.disabled = true;
         btnSubmit.innerText = 'Open Matrix';
@@ -2034,14 +2108,306 @@
   }
 
   async function submitOpenMatrix(pathStr) {
-    const target = pathStr || (browserState.selectedEntry ? browserState.selectedEntry.path : null);
+    let target = pathStr || (browserState.selectedEntry ? browserState.selectedEntry.path : null);
     if (!target) return;
-    if (browserState.selectedEntry && browserState.selectedEntry.is_dir) {
+    if (!pathStr && browserState.selectedEntry && browserState.selectedEntry.is_dir) {
       await fetchBrowsePath(target);
+      return;
+    }
+    if (target.toLowerCase().endsWith('.root')) {
+      closeServerBrowser();
+      await openRootHistogramPicker(target);
       return;
     }
     closeServerBrowser();
     await loadServerMatrixPath(target);
+  }
+
+  let rootPickerPath = '';
+  let rootPickerEntries = [];
+  let liveUpdateBusy = false;
+  let liveBrowserServer = '';
+  let liveBrowserEntries = [];
+  let liveBrowserBusy = false;
+  let lastLiveTreeSelection = '';
+  const liveExpandedFolders = new Map();
+
+  function updateLiveTreeSelection(reveal=false) {
+    const activeURL = metadata?.live?.url || '';
+    reveal = reveal || activeURL !== lastLiveTreeSelection;
+    lastLiveTreeSelection = activeURL;
+    for (const button of document.querySelectorAll('#liveHistogramTree .live-histogram')) {
+      const active = button.dataset.url === activeURL;
+      button.setAttribute('aria-pressed', String(active));
+      button.style.background = active ? '#164e63' : 'transparent';
+      button.style.borderLeft = active ? '3px solid #00e5ff' : '3px solid transparent';
+      if (active && reveal) {
+        for (let parent = button.parentElement; parent; parent = parent.parentElement) {
+          if (parent.tagName === 'DETAILS') parent.open = true;
+        }
+      }
+    }
+  }
+
+  function renderLiveHistogramTree() {
+    const tree = document.getElementById('liveHistogramTree');
+    const scroll = tree.scrollTop;
+    tree.replaceChildren();
+    const query = document.getElementById('liveHistogramSearch').value.trim().toLowerCase();
+    const matches = liveBrowserEntries.filter(entry => `${entry.name} ${entry.type}`.toLowerCase().includes(query));
+    document.getElementById('liveBrowserStatus').textContent = `${matches.length} of ${liveBrowserEntries.length} histograms · click a spectrum to display it`;
+    const root = {folders:new Map(), histograms:[]};
+    for (const entry of matches) {
+      const parts = entry.name.split('/');
+      let node = root;
+      for (const part of parts.slice(0,-1)) {
+        if (!node.folders.has(part)) node.folders.set(part, {folders:new Map(), histograms:[]});
+        node = node.folders.get(part);
+      }
+      node.histograms.push(entry);
+    }
+    function appendNode(node, target, path='', depth=0) {
+      for (const [name, child] of node.folders) {
+        const folderPath = [path,name].filter(Boolean).join('/');
+        const folder = document.createElement('details');
+        folder.dataset.folder = folderPath;
+        folder.open = Boolean(query) || (liveExpandedFolders.has(folderPath) ? liveExpandedFolders.get(folderPath) : depth < 2);
+        const summary = document.createElement('summary');
+        summary.textContent = name;
+        summary.style.cssText = 'cursor:pointer;padding:4px;color:#ffd600;overflow-wrap:anywhere;';
+        const content = document.createElement('div');
+        content.style.paddingLeft = '10px';
+        folder.append(summary, content);
+        folder.addEventListener('toggle', () => {
+          if (!document.getElementById('liveHistogramSearch').value.trim()) liveExpandedFolders.set(folderPath, folder.open);
+        });
+        appendNode(child, content, folderPath, depth+1);
+        target.appendChild(folder);
+      }
+      for (const entry of node.histograms) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'live-histogram';
+        button.dataset.url = entry.url;
+        button.title = entry.name;
+        button.style.cssText = 'display:block;width:100%;text-align:left;padding:5px;border:0;border-radius:3px;color:#e2e8f0;cursor:pointer;overflow-wrap:anywhere;';
+        const label = document.createElement('span');
+        label.textContent = entry.name.split('/').pop();
+        const type = document.createElement('small');
+        type.textContent = ` ${entry.type}`;
+        type.style.color = '#90caf9';
+        button.append(label,type);
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            while (liveUpdateBusy || isSwitchingMatrix) await new Promise(resolve => window.setTimeout(resolve, 100));
+            await connectLiveHistogram(entry.url, liveBrowserServer, entry.type);
+          }
+          finally { button.disabled = false; }
+        });
+        target.appendChild(button);
+      }
+    }
+    appendNode(root, tree);
+    if (!matches.length) tree.textContent = 'No matching histograms.';
+    updateLiveTreeSelection(true);
+    tree.scrollTop = scroll;
+  }
+
+  function updateLiveUI() {
+    updateLiveTreeSelection();
+    const live = metadata?.live;
+    document.getElementById('liveControls').style.display = live ? 'block' : 'none';
+    if (!live) return;
+    const intervalSelect = document.getElementById('liveInterval');
+    if (![...intervalSelect.options].some(option => Number(option.value) === live.interval)) {
+      intervalSelect.add(new Option(`${live.interval} s`, String(live.interval)));
+    }
+    intervalSelect.value = String(live.interval);
+    const status = document.getElementById('liveStatus');
+    const checked = new Date(live.last_checked * 1000).toLocaleTimeString();
+    status.textContent = live.connected
+      ? `${live.paused ? 'Paused' : 'Live'} · snapshot ${live.revision} · checked ${checked}`
+      : `Disconnected · showing snapshot ${live.revision} · ${live.paused ? 'paused' : 'retrying'}. ${live.error}`;
+    status.style.color = live.connected ? '#69f0ae' : '#ffb74d';
+    document.getElementById('btnLivePause').textContent = live.paused ? 'Resume updates' : 'Pause updates';
+  }
+
+  async function livePost(path, body) {
+    const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Live request failed');
+    return data;
+  }
+
+  async function connectLiveHistogram(url, server_url='', type='') {
+    if (liveUpdateBusy || isSwitchingMatrix) return false;
+    liveUpdateBusy = true;
+    try {
+      const data = await livePost('/api/live_connect', {url, server_url, type, interval:Number(document.getElementById('liveInterval').value)});
+      if (data.viewer_url === '/cube/') {
+        window.location.assign(data.viewer_url);
+        return true;
+      }
+      const previous = metadata;
+      metadata = data.metadata;
+      const shapeChanged = !previous?.shape || previous.is_1d !== metadata.is_1d || previous.shape.join() !== metadata.shape.join();
+      updateMatrixUI();
+      if (shapeChanged) view = {x0:0, x1:metadata.shape[0], y0:0, y1:metadata.shape[1]};
+      if (shapeChanged) {
+        gate1DState = {axis:null, w_gates:[], b_gates:[], pending_w:null, pending_b:null, last_res:null};
+        updateGateUI();
+        clearAllFits();
+      }
+      await fetchTileAndRender();
+      await fetch1DProjection();
+      if (!shapeChanged) await reapplyGates();
+      renderBoth1DSpectra();
+      showMatrixToast(`Connected: ${metadata.filename}`);
+      if (metadata.live_browser_url && metadata.live_browser_url !== liveBrowserServer) {
+        await browseLiveServer(metadata.live_browser_url);
+      }
+      return true;
+    } catch (error) {
+      showMatrixToast(`Live connection failed: ${error.message}`, true);
+      return false;
+    } finally { liveUpdateBusy = false; }
+  }
+
+  async function refreshLiveHistogram(force=false) {
+    if (!metadata?.live || liveUpdateBusy || isSwitchingMatrix) return;
+    const index = metadata.active_index;
+    liveUpdateBusy = true;
+    try {
+      const data = await livePost('/api/live_refresh', {index, force, interval:Number(document.getElementById('liveInterval').value)});
+      if (metadata.active_index !== index) return;
+      metadata = data.metadata;
+      if (data.changed) {
+        updateMatrixUI();
+        await fetchTileAndRender();
+        await fetch1DProjection();
+        await reapplyGates();
+        if (document.getElementById('liveAutoFit').checked) await reapplyAllPersistentFits();
+        render2D();
+        renderBoth1DSpectra();
+      } else updateLiveUI();
+    } catch (error) {
+      const status = document.getElementById('liveStatus');
+      status.textContent = `Refresh failed; last snapshot retained. ${error.message}`;
+      status.style.color = '#ffb74d';
+    } finally { liveUpdateBusy = false; }
+  }
+
+  async function liveRefreshLoop() {
+    if (!document.hidden && metadata?.live && !metadata.live.paused) await refreshLiveHistogram();
+    const interval = Number(document.getElementById('liveInterval').value) || 2;
+    window.setTimeout(liveRefreshLoop, interval * 1000);
+  }
+
+  async function browseLiveServer(url) {
+    if (liveBrowserBusy) return;
+    liveBrowserBusy = true;
+    document.getElementById('liveBrowser').style.display = 'block';
+    const status = document.getElementById('liveBrowserStatus');
+    status.textContent = 'Reading live ROOT hierarchy…';
+    document.getElementById('btnLiveListRefresh').disabled = true;
+    try {
+      const res = await fetch('/api/live_histograms?url=' + encodeURIComponent(url));
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Could not browse ROOT server');
+      if (liveBrowserServer !== data.server_url) {
+        liveExpandedFolders.clear();
+        document.getElementById('liveHistogramSearch').value = '';
+      }
+      liveBrowserServer = data.server_url;
+      liveBrowserEntries = data.details;
+      document.getElementById('liveSourceURL').value = liveBrowserServer;
+      document.getElementById('liveBrowserServer').textContent = liveBrowserServer;
+      renderLiveHistogramTree();
+      if (!liveBrowserEntries.length) status.textContent = 'No TH1/TH2 histograms found. You can connect with a direct root.json URL.';
+    } catch (error) {
+      status.textContent = `${error.message}${liveBrowserEntries.length ? ' Previous histogram list retained.' : ' You can also connect with a direct root.json URL.'}`;
+    } finally {
+      liveBrowserBusy = false;
+      document.getElementById('btnLiveListRefresh').disabled = false;
+    }
+  }
+
+  function closeRootHistogramPicker() {
+    document.getElementById('rootPickerModal').style.display = 'none';
+    document.getElementById('rootPickerBackdrop').style.display = 'none';
+  }
+
+  function goToBrowserPath(path) {
+    if (/\.root(?:::.*)?$/i.test(path)) submitOpenMatrix(path);
+    else fetchBrowsePath(path);
+  }
+
+  function renderRootHistogramPicker() {
+    const filter = document.getElementById('rootPickerFilter').value.trim().toLowerCase();
+    const matches = rootPickerEntries.filter(entry => entry.name.toLowerCase().includes(filter)
+      || entry.type.toLowerCase().includes(filter));
+    const list = document.getElementById('rootPickerList');
+    const count = document.getElementById('rootPickerCount');
+    count.textContent = `${matches.length} of ${rootPickerEntries.length} TH1 / TH2 histograms`;
+    list.replaceChildren();
+    if (!matches.length) {
+      const empty = document.createElement('p');
+      empty.style.padding = '12px';
+      empty.textContent = 'No matching histograms';
+      list.appendChild(empty);
+      return;
+    }
+    for (const entry of matches) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.style.cssText = 'display:flex;justify-content:space-between;gap:14px;width:100%;text-align:left;padding:9px 12px;border:0;border-bottom:1px solid #293445;background:transparent;color:#e2e8f0;cursor:pointer;overflow-wrap:anywhere;';
+      if (metadata?.root_histogram === entry.name && metadata.filepath?.split('::')[0] === rootPickerPath) {
+        button.style.background = '#164e63';
+        button.title = 'Currently displayed histogram';
+      }
+      const name = document.createElement('span');
+      name.textContent = entry.name;
+      const type = document.createElement('span');
+      type.textContent = entry.type;
+      type.style.cssText = 'flex:none;color:#00e5ff;font-size:0.72rem;';
+      button.append(name, type);
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const loaded = await loadServerMatrixPath(`${rootPickerPath}::${entry.name}`);
+        button.disabled = false;
+        if (loaded) {
+          closeRootHistogramPicker();
+          const next = metadata.pending_root_files?.[0];
+          if (next) await openRootHistogramPicker(next);
+        }
+      });
+      list.appendChild(button);
+    }
+  }
+
+  async function openRootHistogramPicker(path) {
+    rootPickerPath = path;
+    const modal = document.getElementById('rootPickerModal');
+    document.getElementById('rootPickerBackdrop').style.display = 'block';
+    modal.style.display = 'flex';
+    document.getElementById('rootPickerPath').textContent = path;
+    const filter = document.getElementById('rootPickerFilter');
+    filter.value = '';
+    document.getElementById('rootPickerCount').textContent = 'Reading ROOT file...';
+    document.getElementById('rootPickerList').replaceChildren();
+    try {
+      const response = await fetch('/api/root_histograms?path=' + encodeURIComponent(path));
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || 'Could not read ROOT histograms');
+      rootPickerEntries = data.details || data.histograms.map(name => ({ name, type: 'TH1/TH2' }));
+      if (!rootPickerEntries.length) throw new Error('No TH1 or TH2 histograms in this ROOT file');
+      renderRootHistogramPicker();
+      filter.focus();
+    } catch (error) {
+      document.getElementById('rootPickerCount').textContent = error.message;
+      showMatrixToast(`ROOT load error: ${error.message}`, true);
+    }
   }
 
   function handleBrowserKeyDown(e) {
@@ -2085,8 +2451,10 @@
   }
 
   async function loadServerMatrixPath(pathStr) {
-    if (!pathStr || !pathStr.trim()) return;
+    if (!pathStr || !pathStr.trim()) return false;
     showMatrixToast(`Loading ${pathStr}...`);
+    const hadMatrix = Boolean(metadata && metadata.shape && metadata.shape[0]);
+    const previousIs1D = Boolean(metadata?.is_1d);
     try {
       const res = await fetch('/api/load_matrix_path', {
         method: 'POST',
@@ -2096,16 +2464,25 @@
       const data = await res.json();
       if (data.error) {
         showMatrixToast(`Load error: ${data.error}`, true);
-        return;
+        return false;
       }
       metadata = data;
       updateMatrixUI();
 
       // Preserve Viewport, Colormap, Gates, Fits
-      view.x0 = Math.max(0, Math.min(metadata.shape[0] - 1, view.x0));
-      view.x1 = Math.max(view.x0 + 1, Math.min(metadata.shape[0], view.x1));
-      view.y0 = Math.max(0, Math.min(metadata.shape[1] - 1, view.y0));
-      view.y1 = Math.max(view.y0 + 1, Math.min(metadata.shape[1], view.y1));
+      if (!hadMatrix || previousIs1D !== Boolean(metadata.is_1d)) {
+        view = { x0: 0, x1: metadata.shape[0], y0: 0, y1: metadata.shape[1] };
+        maxCountGlobal = Math.max(100, metadata.max_count || 1000);
+        currentVmax = Math.min(800, maxCountGlobal);
+        const slider = document.getElementById('vmaxSlider');
+        if (slider) slider.value = valueToVmaxSlider(currentVmax);
+        document.getElementById('vmaxLabel').innerText = currentVmax;
+      } else {
+        view.x0 = Math.max(0, Math.min(metadata.shape[0] - 1, view.x0));
+        view.x1 = Math.max(view.x0 + 1, Math.min(metadata.shape[0], view.x1));
+        view.y0 = Math.max(0, Math.min(metadata.shape[1] - 1, view.y0));
+        view.y1 = Math.max(view.y0 + 1, Math.min(metadata.shape[1], view.y1));
+      }
 
       await fetchTileAndRender();
       await fetch1DProjection();
@@ -2118,9 +2495,11 @@
       renderBoth1DSpectra();
 
       showMatrixToast(`Successfully loaded ${metadata.filename} (Conditions preserved)`);
+      return true;
     } catch (err) {
       console.error("Server path load error:", err);
       showMatrixToast(`Failed to load: ${err.message}`, true);
+      return false;
     }
   }
 
@@ -2136,8 +2515,10 @@
 
     const res = await fetch('/api/metadata');
     metadata = await res.json();
-    updateMatrixUI();
-    view = { x0: 0, x1: metadata.shape[0], y0: 0, y1: metadata.shape[1] };
+    if (metadata.shape) updateMatrixUI();
+    view = metadata.shape
+      ? { x0: 0, x1: metadata.shape[0], y0: 0, y1: metadata.shape[1] }
+      : { x0: 0, x1: 1, y0: 0, y1: 1 };
 
     // Apply configuration defaults
     const cfg = metadata.config || {};
@@ -2224,13 +2605,25 @@
     }
 
     setupEvents();
+    window.setTimeout(liveRefreshLoop, 2000);
+    const rememberedLiveServer = metadata.pending_live_server || metadata.live_browser_url || metadata.live?.server_url;
+    if (rememberedLiveServer) {
+      document.getElementById('liveSourceURL').value = rememberedLiveServer;
+      await browseLiveServer(rememberedLiveServer);
+    }
     fetchFitLogStatus();
     updateScaleBadge2D();
+    if (!metadata.shape) {
+      if (metadata.pending_root_files?.length) await openRootHistogramPicker(metadata.pending_root_files[0]);
+      return;
+    }
     await fetchTileAndRender();
     await fetch1DProjection();
+    if (metadata.pending_root_files?.length) await openRootHistogramPicker(metadata.pending_root_files[0]);
   }
 
   async function fetchTileAndRender() {
+    if (metadata && metadata.is_1d) return;
     const dpr = window.devicePixelRatio || 1;
     const pr = getPlotRect2D();
     const reqW = Math.min(2048, Math.max(128, Math.round(pr.w * dpr)));
@@ -2242,7 +2635,7 @@
     tileH = parseInt(res.headers.get('X-Shape-H')) || reqH;
     const buf = await res.arrayBuffer();
 
-    currentTileData = new Int32Array(buf);
+    currentTileData = res.headers.get('X-Data-Type') === 'float64' ? new Float64Array(buf) : new Int32Array(buf);
     let maxVal = 0;
     for (let i = 0; i < currentTileData.length; i++) {
       if (currentTileData[i] > maxVal) maxVal = currentTileData[i];
@@ -2560,6 +2953,15 @@
     const res = await fetch(url);
     const data = await res.json();
 
+    if (metadata.is_1d) {
+      document.getElementById('specTitleX').innerText = `Spectrum: ${metadata.root_histogram || metadata.filename}`;
+      currentProjSpecX = data.specX;
+      currentProjSpecY = [];
+      renderBoth1DSpectra();
+      await updateActive1DFits();
+      return;
+    }
+
     if (gate1DState.axis === null || gate1DState.w_gates.length === 0) {
       currentProjSpecX = data.specX;
       currentProjSpecY = data.specY;
@@ -2645,6 +3047,8 @@
     ctx2d.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
 
+    const isCalX = isAxisCalibrated(0);
+    const isCalY = isAxisCalibrated(1);
     const numTicks = 6;
     for (let i = 0; i <= numTicks; i++) {
       const frac = i / numTicks;
@@ -2654,17 +3058,15 @@
       const py = Math.round(pr.y + pr.h - frac * pr.h);
       ctx2d.beginPath();
       ctx2d.moveTo(px, pr.y + pr.h); ctx2d.lineTo(px, pr.y + pr.h + 6); ctx2d.stroke();
-      ctx2d.fillText(chX.toString(), px, pr.y + pr.h + 22);
+      ctx2d.fillText(isCalX ? chToEnergy(chX, 0).toFixed(0) : chX.toString(), px, pr.y + pr.h + 22);
       ctx2d.beginPath();
       ctx2d.moveTo(pr.x, py); ctx2d.lineTo(pr.x - 6, py); ctx2d.stroke();
       ctx2d.textAlign = 'right';
-      ctx2d.fillText(chY.toString(), pr.x - 10, py + 6);
+      ctx2d.fillText(isCalY ? chToEnergy(chY, 1).toFixed(0) : chY.toString(), pr.x - 10, py + 6);
       ctx2d.textAlign = 'center';
     }
 
     // 2D Axis Titles
-    const isCalX = isAxisCalibrated(0);
-    const isCalY = isAxisCalibrated(1);
     ctx2d.fillStyle = '#00e5ff';
     ctx2d.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
@@ -5227,14 +5629,14 @@
       ctx.stroke();
       if (isCal) {
         const eStr = chToEnergy(c + 0.5, axis).toFixed(0);
-        ctx.fillText(`${eStr}k (${c})`, x, pr.y + pr.h + 20);
+        ctx.fillText(eStr, x, pr.y + pr.h + 20);
       } else {
         ctx.fillText(c.toString(), x, pr.y + pr.h + 20);
       }
     }
     const xLabel = (axis === 0)
-      ? (isCal ? 'Det 1 Energy (keV) / Channel' : 'Det 1 Channel')
-      : (isCal ? 'Det 2 Energy (keV) / Channel' : 'Det 2 Channel');
+      ? (isCal ? 'Det 1 Energy (keV)' : 'Det 1 Channel')
+      : (isCal ? 'Det 2 Energy (keV)' : 'Det 2 Channel');
     ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = (axis === 0) ? '#00e5ff' : '#ff9800';
     ctx.fillText(xLabel, pr.x + pr.w / 2, pr.y + pr.h + 42);
@@ -5267,7 +5669,7 @@
 
   function renderBoth1DSpectra() {
     render1DSpectrum(canvas1dX, ctx1dX, currentProjSpecX, 0, cursor1DChannelX);
-    render1DSpectrum(canvas1dY, ctx1dY, currentProjSpecY, 1, cursor1DChannelY);
+    if (!metadata || !metadata.is_1d) render1DSpectrum(canvas1dY, ctx1dY, currentProjSpecY, 1, cursor1DChannelY);
   }
 
   function updateScaleBadge2D() {
@@ -5316,10 +5718,10 @@
     const dVal = markers.down !== null ? markers.down : Math.round(view.y0);
     const uVal = markers.up !== null ? markers.up : Math.round(view.y1);
 
-    const lStr = isCalX ? `${lVal} (${chToEnergy(lVal, 0).toFixed(0)}k)` : `${lVal}`;
-    const rStr = isCalX ? `${rVal} (${chToEnergy(rVal, 0).toFixed(0)}k)` : `${rVal}`;
-    const dStr = isCalY ? `${dVal} (${chToEnergy(dVal, 1).toFixed(0)}k)` : `${dVal}`;
-    const uStr = isCalY ? `${uVal} (${chToEnergy(uVal, 1).toFixed(0)}k)` : `${uVal}`;
+    const lStr = isCalX ? `${lVal} (${chToEnergy(lVal, 0).toFixed(0)} keV)` : `${lVal}`;
+    const rStr = isCalX ? `${rVal} (${chToEnergy(rVal, 0).toFixed(0)} keV)` : `${rVal}`;
+    const dStr = isCalY ? `${dVal} (${chToEnergy(dVal, 1).toFixed(0)} keV)` : `${dVal}`;
+    const uStr = isCalY ? `${uVal} (${chToEnergy(uVal, 1).toFixed(0)} keV)` : `${uVal}`;
 
     const statusEl = document.getElementById('overlayStatus');
     if (statusEl) {
@@ -5871,9 +6273,12 @@
       gate1DState.axis === 1 - selectedAxis &&
       gate1DState.w_gates && gate1DState.w_gates.length > 0
     );
-    const xEnergy = isAxisCalibrated(selectedAxis)
-      ? x.map(ch => chToEnergy(ch, selectedAxis))
+    const cal = getCalForAxis(selectedAxis);
+    const xEnergy = (metadata.root_histogram || isAxisCalibrated(selectedAxis))
+      ? x.map(ch => (cal[0] || 0) + (cal[1] === undefined ? 1 : cal[1]) * (ch + (metadata.root_histogram ? 0.5 : 0)) + (cal[2] || 0) * (ch + (metadata.root_histogram ? 0.5 : 0)) ** 2)
       : null;
+    const physicalLabel = metadata.axis_labels?.[selectedAxis] || (metadata.root_histogram ? 'ROOT axis coordinate' : 'Energy (keV)');
+    const physicalUnit = metadata.axis_units?.[selectedAxis] || (metadata.root_histogram ? 'axis units' : 'keV');
 
     return {
       success: true,
@@ -5882,6 +6287,8 @@
       y,
       dy,
       x_energy: xEnergy,
+      x_axis_label: physicalLabel,
+      x_unit: physicalUnit,
       header_lines: [
         `# Current WebViewer 1D View - Det ${selectedAxis + 1}`,
         `# Visible channels: ${chStart}..${chEnd}${isSynced ? ' (synced to 2D view)' : ' (full projection)'}`,
@@ -6005,6 +6412,42 @@
 
     const btnHeaderOpen = document.getElementById('btnHeaderOpenBrowser');
     if (btnHeaderOpen) btnHeaderOpen.addEventListener('click', () => openServerBrowser());
+    const btnRootHistograms = document.getElementById('btnRootHistograms');
+    document.getElementById('btnLiveConnect').addEventListener('click', async () => {
+      const url = document.getElementById('liveSourceURL').value.trim();
+      if (!url) return showMatrixToast('Enter a ROOT server or histogram URL', true);
+      if (/\/root\.json(?:\.gz)?(?:\?|$)/.test(url)) await connectLiveHistogram(url);
+      else await browseLiveServer(url);
+    });
+    document.getElementById('btnLiveListRefresh').addEventListener('click', () => {
+      const url = liveBrowserServer || document.getElementById('liveSourceURL').value.trim();
+      if (url) browseLiveServer(url);
+    });
+    document.getElementById('liveHistogramSearch').addEventListener('input', renderLiveHistogramTree);
+    document.getElementById('liveSourceURL').addEventListener('keydown', event => {
+      if (event.key === 'Enter') document.getElementById('btnLiveConnect').click();
+    });
+    document.getElementById('btnLivePause').addEventListener('click', async () => {
+      try {
+        if (!metadata?.live || liveUpdateBusy) return;
+        const data = await livePost('/api/live_control', {paused:!metadata.live.paused});
+        metadata = data.metadata;
+        updateLiveUI();
+      } catch (error) { showMatrixToast(error.message, true); }
+    });
+    document.getElementById('btnLiveRefresh').addEventListener('click', () => refreshLiveHistogram(true));
+    document.getElementById('liveInterval').addEventListener('change', async () => {
+      if (!metadata?.live) return;
+      try {
+        const data = await livePost('/api/live_control', {interval:Number(document.getElementById('liveInterval').value)});
+        metadata = data.metadata;
+        updateLiveUI();
+      } catch (error) { showMatrixToast(error.message, true); }
+    });
+    if (btnRootHistograms) btnRootHistograms.addEventListener('click', () => {
+      const rootPath = (metadata?.filepath || '').split('::')[0];
+      if (rootPath) openRootHistogramPicker(rootPath);
+    });
 
     const btnCloseBrowser = document.getElementById('btnBrowserClose');
     if (btnCloseBrowser) btnCloseBrowser.addEventListener('click', closeServerBrowser);
@@ -6054,7 +6497,7 @@
     if (btnPathGo && pathInp) {
       btnPathGo.addEventListener('click', () => {
         const v = pathInp.value.trim();
-        if (v) fetchBrowsePath(v);
+        if (v) goToBrowserPath(v);
       });
     }
     if (pathInp) {
@@ -6062,7 +6505,7 @@
         if (e.key === 'Enter') {
           e.preventDefault();
           const v = pathInp.value.trim();
-          if (v) fetchBrowsePath(v);
+          if (v) goToBrowserPath(v);
         } else if (e.key === 'Escape') {
           if (pathWrap) pathWrap.style.display = 'none';
         }
@@ -6105,6 +6548,17 @@
     if (btnSubmitBrowser) {
       btnSubmitBrowser.addEventListener('click', () => submitOpenMatrix());
     }
+    document.getElementById('rootPickerClose').addEventListener('click', closeRootHistogramPicker);
+    document.getElementById('rootPickerFilter').addEventListener('input', renderRootHistogramPicker);
+    document.getElementById('rootPickerFilter').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        document.querySelector('#rootPickerList button')?.click();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRootHistogramPicker();
+      }
+    });
 
     document.getElementById('cmapSelect').addEventListener('change', () => { updateColorLUT(); render2D(); });
     const vmaxSlider = document.getElementById('vmaxSlider');
@@ -6378,7 +6832,7 @@
         unfocusControls();
       }
 
-      const targetPanel = getFocusedPanel();
+      const targetPanel = (metadata && metadata.is_1d) ? '1d-0' : getFocusedPanel();
 
       if (targetPanel === '1d-0' || targetPanel === '1d-1') {
         // 1D Spectrum Panning (Left/Right shifts channel window, Up/Down adjusts vertical counts scale)
@@ -6418,8 +6872,8 @@
       else if (e.key === 'm' || e.key === 'M') toggleSidebar();
       else if (e.key === 'q' || e.key === 'Q') quitViewer();
       else if (e.key === '=' || e.key === '+') clearAllFits();
-      else if (e.key === 'w' || e.key === 'W') handleGateKeyPress('w');
-      else if (e.key === 'x' || e.key === 'X') handleGateKeyPress('x');
+      else if (e.key === 'w' || e.key === 'W') { if (!metadata?.is_1d) handleGateKeyPress('w'); }
+      else if (e.key === 'x' || e.key === 'X') { if (!metadata?.is_1d) handleGateKeyPress('x'); }
       else if (e.key === 'b' || e.key === 'B') {
         if (e.shiftKey || targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {
           toggleBananaMode('bg');
@@ -6445,9 +6899,9 @@
         }
       }
       else if (e.key === 'g' || e.key === 'G') {
-        if (e.shiftKey) {
+        if (e.shiftKey && !metadata?.is_1d) {
           toggleBananaMode('peak');
-        } else {
+        } else if (!e.shiftKey) {
           let activeAxis = null;
           let activeCh = null;
           if (hovered1DAxis === 0 && cursor1DChannelX !== null) {
@@ -6481,7 +6935,7 @@
         }
       }
       else if (e.key === 'v' || e.key === 'V') {
-        if (isMouseOver2D) requestPeakFit2D(cursorChannel.x, cursorChannel.y);
+        if (isMouseOver2D && !metadata?.is_1d) requestPeakFit2D(cursorChannel.x, cursorChannel.y);
         else if (cursor1DChannelX !== null) requestPeakFit(0, cursor1DChannelX);
         else if (cursor1DChannelY !== null) requestPeakFit(1, cursor1DChannelY);
         else if (targetPanel === '1d-0') requestPeakFit(0, Math.round(view.x0 + (view.x1 - view.x0) / 2));
