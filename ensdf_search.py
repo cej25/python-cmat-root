@@ -41,7 +41,25 @@ ELEMENT_Z_MAP = {
 Z_ELEMENT_MAP = {v: k for k, v in ELEMENT_Z_MAP.items() if k != "NN"}
 
 DEFAULT_DB_FILENAME = "ensdf.db"
+SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ENSDF_DIR = "/Users/razvanlica/Downloads/ensdf_260901"
+
+
+def resolve_db_path(db_path: str) -> Path:
+    """
+    Resolve a database path argument.
+
+    Explicit paths (absolute, or relative with a directory component) are
+    honored as-is relative to the current working directory. A bare filename
+    (e.g. the default "ensdf.db") is anchored to the source directory where
+    pycmat and ensdf_search.py live, so the database is created/unpacked next
+    to the source files regardless of the working directory the command is
+    run from.
+    """
+    p = Path(db_path).expanduser()
+    if p.is_absolute() or p.parent != Path("."):
+        return p.resolve()
+    return (SCRIPT_DIR / p).resolve()
 
 
 def parse_halflife(s: str) -> Tuple[Optional[float], str]:
@@ -254,7 +272,7 @@ def build_ensdf_database(ensdf_dir: str, db_path: str = DEFAULT_DB_FILENAME, ver
     if not files:
         raise FileNotFoundError(f"No ensdf.* files found in {ensdf_dir}")
 
-    db_file = Path(db_path).resolve()
+    db_file = resolve_db_path(db_path)
     if db_file.exists():
         try:
             db_file.unlink()
@@ -511,15 +529,21 @@ class ENSDFSearchEngine:
     """Fast local search engine for 1D photopeaks and 2D coincidence cascade pairs."""
 
     def __init__(self, db_path: str = DEFAULT_DB_FILENAME):
-        self.db_path = Path(db_path).resolve()
-        if not self.db_path.exists():
-            cwd_db = Path.cwd() / DEFAULT_DB_FILENAME
-            if cwd_db.exists():
+        p = Path(db_path).expanduser()
+        bare_default = not (p.is_absolute() or p.parent != Path("."))
+        if bare_default:
+            script_db = (SCRIPT_DIR / p).resolve()
+            cwd_db = (Path.cwd() / p).resolve()
+            # Prefer the database in the source directory; fall back to one
+            # previously built in the current working directory, if any.
+            if script_db.exists():
+                self.db_path = script_db
+            elif cwd_db.exists():
                 self.db_path = cwd_db
             else:
-                script_db = Path(__file__).resolve().parent / DEFAULT_DB_FILENAME
-                if script_db.exists():
-                    self.db_path = script_db
+                self.db_path = script_db
+        else:
+            self.db_path = p.resolve()
 
         self._ensure_db_decompressed()
         self._conn = None
@@ -530,13 +554,18 @@ class ENSDFSearchEngine:
             gz_candidates = [
                 self.db_path.with_name(self.db_path.name + ".gz"),
                 self.db_path.parent / (DEFAULT_DB_FILENAME + ".gz"),
+                SCRIPT_DIR / (DEFAULT_DB_FILENAME + ".gz"),
                 Path.cwd() / (DEFAULT_DB_FILENAME + ".gz"),
-                Path(__file__).resolve().parent / (DEFAULT_DB_FILENAME + ".gz"),
             ]
             for gz in gz_candidates:
                 if gz.exists() and gz.stat().st_size > 1024:
                     import gzip, shutil
-                    target_db = self.db_path if self.db_path.name.endswith(".db") else (Path(__file__).resolve().parent / DEFAULT_DB_FILENAME)
+                    # Unpack the default database into the source directory,
+                    # not the working directory the command was run from.
+                    if self.db_path.name.endswith(".db"):
+                        target_db = self.db_path
+                    else:
+                        target_db = SCRIPT_DIR / DEFAULT_DB_FILENAME
                     tmp_target = target_db.with_suffix(".tmp")
                     try:
                         print(f"📦 Unpacking local ENSDF database from {gz.name}...", file=sys.stderr)
