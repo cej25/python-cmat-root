@@ -7,10 +7,12 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Large generated exports & data files
+# Large generated exports & data files & examples
+# The examples folder will be uploaded separately
 *.amat
 *.dat
 *.cmat
+examples/
 
 # Virtual environments
 .env
