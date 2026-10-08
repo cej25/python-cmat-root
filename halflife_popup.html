@@ -919,6 +919,7 @@
     });
 
     window.addEventListener('DOMContentLoaded', async () => {
+      startBackendWatchdog();
       initCanvasSize();
       window.addEventListener('resize', () => {
         initCanvasSize();
@@ -2692,6 +2693,69 @@
       } catch (error) {
         alert(`PDF export failed: ${error.message}`);
       }
+    }
+
+    // --- Backend watchdog: auto-close when the viewer server is gone ---
+    const BACKEND_PROBE_URL = '/api/halflife/files';
+    let backendFailCount = 0;
+
+    async function probeBackend() {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      try {
+        const res = await fetch(BACKEND_PROBE_URL, { signal: ctrl.signal, cache: 'no-store' });
+        return res.ok;
+      } catch (e) {
+        // Connection refused, network error, or timeout -> backend unreachable
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function showServerGoneOverlay() {
+      if (document.getElementById('backendGoneOverlay')) return;
+      const ov = document.createElement('div');
+      ov.id = 'backendGoneOverlay';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(8,12,20,0.96);display:flex;align-items:center;justify-content:center;';
+      ov.innerHTML = `<div style="text-align:center;color:#e6edf3;font-family:system-ui,sans-serif;max-width:440px;padding:24px;">
+          <div style="font-size:2.4rem;">⚠️</div>
+          <div style="font-size:1.05rem;font-weight:600;margin:10px 0 6px;">Backend server is no longer running</div>
+          <div style="font-size:0.85rem;color:#9aa4b2;line-height:1.5;">This popup was restored from a previous session or the viewer was stopped. It will close automatically.</div>
+          <button id="backendGoneCloseBtn" style="margin-top:16px;padding:8px 18px;border:1px solid #30363d;border-radius:6px;background:#21262d;color:#e6edf3;font-size:0.85rem;cursor:pointer;">Close now</button>
+        </div>`;
+      document.body.appendChild(ov);
+      document.getElementById('backendGoneCloseBtn').addEventListener('click', () => window.close());
+      // Popup was opened via window.open(), so script-initiated close is allowed.
+      // If it somehow fails (page opened directly), the overlay with the button stays.
+      setTimeout(() => window.close(), 2500);
+    }
+
+    async function backendHeartbeat() {
+      const ok = await probeBackend();
+      if (ok) {
+        backendFailCount = 0;
+        return;
+      }
+      backendFailCount += 1;
+      if (backendFailCount >= 2) {
+        showServerGoneOverlay();
+      }
+    }
+
+    async function startBackendWatchdog() {
+      // Startup check: catch tabs/windows restored from a session whose server
+      // is already gone (browser session restore). Two quick probes.
+      if (!(await probeBackend())) {
+        await new Promise(r => setTimeout(r, 1500));
+        if (!(await probeBackend())) {
+          backendFailCount = 2;
+          showServerGoneOverlay();
+          return;
+        }
+      }
+      // Ongoing heartbeat while the popup is in use: server stopped mid-session.
+      setInterval(backendHeartbeat, 25000);
     }
   </script>
 </body>
