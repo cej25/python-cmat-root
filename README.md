@@ -339,6 +339,9 @@ This work was supported by a grant of the Romanian Ministry of Research, Innovat
 
 ## Disclaimer
 
-This project was developed with the assistance of Gemini 3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind. 
+RL: This project was initially developed with the assistance of Gemini 3.7-3.8-flash-high through **Antigravity**, an agentic AI coding assistant developed by Google DeepMind.
+The most recent changes are now implemented using opensource LLMs (glm-5.3-flash-int4) through the [CERN AI Gateway](https://ml.docs.cern.ch/aigw/gettingstarted/) using the Cline extension in VSCode. 
 
-Further development, including ROOT file support and live ROOT histogram viewing, was carried out with the assistance of **ChatGPT**, developed by OpenAI.
+CEJ: Further development including ROOT file support and live ROOT histogram viewing, was carried out with the assistance of **ChatGPT**, developed by OpenAI.
+
+

@@ -7,12 +7,15 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Large generated exports & data files & examples
-# The examples folder will be uploaded separately
+# Large generated exports & data files
 *.amat
 *.dat
-*.cmat
-examples/
+examples/*.dat
+examples/*.txt
+examples/*.pdf
+
+# Example files exceeding GitHub's 100 MiB per-file upload limit
+examples/Ge-R3D-FA_26MeV_T2T4.cmat
 
 # Virtual environments
 .env
