@@ -112,19 +112,86 @@ def is_ssh_session() -> bool:
     return any(k in os.environ for k in ("SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"))
 
 
+def is_wsl() -> bool:
+    """Check if the script is running under Windows Subsystem for Linux."""
+    if "WSL_DISTRO_NAME" in os.environ or "WSLENV" in os.environ:
+        return True
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except Exception:
+        return False
+
+
+def _open_url_windows(url: str) -> bool:
+    """
+    Open a URL with the Windows default browser from within WSL.
+    Tries wslview (wslu) first, then falls back to cmd.exe start.
+    Returns True on success, False if no method worked.
+    """
+    import shutil
+    import subprocess
+
+    # wslview (part of wslu) is the cleanest WSL -> Windows launcher
+    wslview = shutil.which("wslview")
+    if wslview:
+        try:
+            subprocess.run(
+                [wslview, url], check=True, timeout=15,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            pass
+
+    # Fall back to cmd.exe (present on every Windows host; usually in the
+    # WSL PATH via interop, with an absolute path as last resort).
+    cmd_candidates = [
+        shutil.which("cmd.exe"),
+        "/mnt/c/Windows/System32/cmd.exe",
+    ]
+    for cmd in cmd_candidates:
+        if not cmd:
+            continue
+        try:
+            subprocess.run(
+                [cmd, "/c", "start", "", url], check=True, timeout=15,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def launch_browser(url: str, browser_name: str = "default") -> None:
     """Launch the specified web browser to open the given URL."""
     try:
         b_name = (browser_name or "default").strip().lower()
-        if b_name in ("default", "auto", "true", "1", ""):
-            webbrowser.open(url)
-        else:
+        is_default = b_name in ("default", "auto", "true", "1", "")
+
+        if not is_default:
             try:
                 controller = webbrowser.get(browser_name)
                 controller.open(url)
+                return
             except Exception:
-                # Fallback to default if specific browser controller was not found
-                webbrowser.open(url)
+                # Specific browser controller not found; fall back to default
+                pass
+
+        if is_wsl():
+            # Under WSL there is normally no Linux browser installed, so the
+            # default webbrowser module (xdg-open) fails. Open the URL with
+            # the Windows default browser instead.
+            if _open_url_windows(url):
+                return
+            print(
+                "[!] Note: could not auto-launch the Windows browser; "
+                "Ctrl+Click the URL above to open it.",
+                file=sys.stderr,
+            )
+
+        webbrowser.open(url)
     except Exception as e:
         print(f"[!] Warning: Could not automatically launch browser: {e}", file=sys.stderr)
 

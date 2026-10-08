@@ -35,15 +35,15 @@ The server binds to `http://0.0.0.0:8080` (or the configured host/port) and auto
 
 When running inside WSL on Windows, launching native GUI applications via X11 can cause window-grab issues and slow rendering. `cmat_webviewer` leverages your host Windows browser directly for full hardware-accelerated WebGL/Canvas rendering.
 
-To enable seamless browser launching from WSL, install `wslu` and configure `BROWSER`:
+Browser launching from WSL works out of the box: the viewer detects WSL automatically and opens the page with your default Windows browser (`cmd.exe /c start` fallback), so no configuration is required.
+
+Optionally, install `wslu` for native WSL→Windows integration:
 
 ```bash
 sudo apt update && sudo apt install wslu
-echo 'export BROWSER=wslview' >> ~/.bashrc
-source ~/.bashrc
 ```
 
-Once configured, launching `cmat_webviewer.py` inside WSL will automatically open your default Windows browser.
+The viewer picks up `wslview` automatically when present and uses it as the preferred launcher.
 
 ---
 

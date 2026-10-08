@@ -115,10 +115,10 @@ python3 cmat3d_webviewer.py /path/to/matrix3d.cmat
 
 > [!TIP]
 > **Windows Subsystem for Linux (WSL) Users**:
-> To automatically open the web viewers in your host Windows browser (with full GPU hardware acceleration), install `wslu`:
+> The web viewers detect WSL automatically and open the page in your host Windows browser — no configuration needed.
+> Optionally, install `wslu` for native WSL→Windows integration (the viewers will pick up `wslview` automatically):
 > ```bash
 > sudo apt update && sudo apt install wslu
-> echo 'export BROWSER=wslview' >> ~/.bashrc && source ~/.bashrc
 > ```
 
 ### 3. ASCII & CMAT Converters (`cmat2amat.py` & `amat2cmat.py`)
