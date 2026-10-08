@@ -25,6 +25,7 @@ import sys
 import time
 import math
 import json
+import base64
 import socket
 import argparse
 import webbrowser
@@ -1689,6 +1690,32 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                          "/api/halflife/compress", "/api/halflife/export_pdf"):
             from cmat_webviewer import CMATWebHandler
             return CMATWebHandler.do_POST(self)
+        if self.path == "/api/save_export":
+            # Generic server-side export sink: the browser sends an already
+            # generated export (PDF/DAT blob) to be written next to the data.
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+                data = json.loads(self.rfile.read(content_len).decode("utf-8"))
+                filename = os.path.basename(str(data.get("filename", "")).strip())
+                if not filename or filename in (".", ".."):
+                    raise ValueError("No valid filename provided")
+                payload = base64.b64decode(data.get("data_base64", ""))
+                if not payload:
+                    raise ValueError("No export data provided")
+                target_path = Path.cwd() / filename
+                with open(target_path, "wb") as f:
+                    f.write(payload)
+                print(f"[*] Export saved server-side: {target_path} ({len(payload):,} bytes)", flush=True)
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "path": str(target_path), "size": len(payload)}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(400)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+            return
         session = self.get_session()
         m = session.get_active_matrix()
 

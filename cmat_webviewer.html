@@ -5889,6 +5889,90 @@
 
   let hoverTimer = null;
 
+  // --- Save destination dialog (client download vs server-side file) ---
+  function filenameFromDisposition(resp, fallback) {
+    const cd = resp.headers.get('Content-Disposition');
+    if (cd) {
+      const m = /filename\*?=(?:UTF-8'')?"?([^";]+)/i.exec(cd);
+      if (m) return decodeURIComponent(m[1].replace(/"/g, ''));
+    }
+    return fallback;
+  }
+
+  async function fetchServerExport(url) {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      let msg = `Export failed (HTTP ${resp.status})`;
+      try { const j = await resp.json(); if (j.error) msg = j.error; } catch (e) {}
+      throw new Error(msg);
+    }
+    return { blob: await resp.blob(), filename: filenameFromDisposition(resp, 'export') };
+  }
+
+  function downloadBlobLocally(filename, blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  function saveExportDialog(filename, blob) {
+    return new Promise((resolve) => {
+      const old = document.getElementById('saveDestOverlay');
+      if (old) old.remove();
+      const ov = document.createElement('div');
+      ov.id = 'saveDestOverlay';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(4,8,16,0.82);display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif;';
+      ov.innerHTML = `
+        <div style="background:#0d1420;border:1px solid #26324a;border-radius:10px;padding:22px 26px;width:380px;color:#e6edf3;box-shadow:0 12px 40px rgba(0,0,0,0.65);">
+          <div style="font-size:1rem;font-weight:600;margin-bottom:4px;">Save export</div>
+          <div style="font-size:0.78rem;color:#9aa4b2;margin-bottom:14px;word-break:break-all;">${filename}</div>
+          <div id="saveDestStatus" style="display:none;font-size:0.8rem;margin-bottom:10px;line-height:1.4;word-break:break-all;"></div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <button id="saveDestClient" style="padding:10px 12px;border:1px solid #26324a;border-radius:8px;background:#161d2c;color:#e6edf3;font-size:0.88rem;cursor:pointer;text-align:left;">💻&nbsp; Client — download to this computer</button>
+            <button id="saveDestServer" style="padding:10px 12px;border:1px solid #26324a;border-radius:8px;background:#161d2c;color:#e6edf3;font-size:0.88rem;cursor:pointer;text-align:left;">🖥️&nbsp; Server — save next to the data files</button>
+            <button id="saveDestCancel" style="padding:8px 12px;border:1px solid #26324a;border-radius:8px;background:transparent;color:#9aa4b2;font-size:0.8rem;cursor:pointer;text-align:left;">Cancel</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      const close = () => { ov.remove(); resolve(); };
+      const setStatus = (msg, color) => {
+        const el = ov.querySelector('#saveDestStatus');
+        el.style.display = 'block'; el.style.color = color; el.textContent = msg;
+      };
+      ov.querySelector('#saveDestCancel').addEventListener('click', close);
+      ov.querySelector('#saveDestClient').addEventListener('click', () => { downloadBlobLocally(filename, blob); close(); });
+      ov.querySelector('#saveDestServer').addEventListener('click', async () => {
+        const btn = ov.querySelector('#saveDestServer');
+        btn.disabled = true;
+        try {
+          const b64 = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(String(r.result).split(',')[1] || '');
+            r.onerror = () => rej(new Error('Could not read export data'));
+            r.readAsDataURL(blob);
+          });
+          const resp = await fetch('/api/save_export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: filename, data_base64: b64 })
+          });
+          const out = await resp.json();
+          if (!out.success) throw new Error(out.error || 'Save failed');
+          setStatus(`✅ Saved on server: ${out.path}`, '#3fb950');
+          setTimeout(close, 1800);
+        } catch (e) {
+          setStatus(`❌ ${e.message}`, '#f85149');
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
   function export1DData(axis) {
     const spec = (axis === 0) ? currentProjSpecX : currentProjSpecY;
     if (!spec) return;
@@ -5934,13 +6018,10 @@
     }
 
     const blob = new Blob([content], { type: 'text/plain' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${metadata.filename}_${detName}_${chStart}_${chEnd}.dat`;
-    a.click();
+    saveExportDialog(`${metadata.filename}_${detName}_${chStart}_${chEnd}.dat`, blob);
   }
 
-  function printPDF1D(axis) {
+  async function printPDF1D(axis) {
     try {
       const isSynced = (document.getElementById('projRangeSelect').value === 'synced');
       const isLog = (projScale1D[axis] === 'log') ? 1 : 0;
@@ -6016,22 +6097,15 @@
         url += `&has_fit=1&fit_ch=${fit.centroid_ch}&fit_type=${fitType}&fwhm_mult=${fwhmMult}`;
       }
 
-      const w = window.open(url, '_blank');
-      if (!w) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.target = '_blank';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
+      const { blob, filename } = await fetchServerExport(url);
+      saveExportDialog(filename, blob);
     } catch (err) {
       console.error("Print PDF 1D error:", err);
       alert("Error generating 1D PDF: " + err.message);
     }
   }
 
-  function printPDF2D() {
+  async function printPDF2D() {
     try {
       const x0 = Math.floor(Math.max(0, view.x0));
       const x1 = Math.ceil(Math.min(metadata.shape[0], view.x1));
@@ -6043,6 +6117,8 @@
       const vmax = currentVmax || 100;
       const f2d = activeFit2D;
       const fitType = getActiveFitType();
+
+      let url = `/api/export_pdf_2d?x0=${x0}&x1=${x1}&y0=${y0}&y1=${y1}&cmap=${encodeURIComponent(cmap)}&scale=${encodeURIComponent(scale)}&vmin=${vmin}&vmax=${vmax}`;
 
       const fits2DList = (activeFits2D && activeFits2D.length > 0) ? activeFits2D : (f2d ? [f2d] : []);
       const visibleFits2D = fits2DList.filter(f =>
@@ -6056,15 +6132,8 @@
       } else if (f2d && f2d.centroid_x_ch !== undefined) {
         url += `&has_fit=1&fit_x=${f2d.centroid_x_ch}&fit_y=${f2d.centroid_y_ch}&fit_type=${fitType}`;
       }
-      const w = window.open(url, '_blank');
-      if (!w) {
-        const a = document.createElement('a');
-        a.href = url;
-        a.target = '_blank';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
+      const { blob, filename } = await fetchServerExport(url);
+      saveExportDialog(filename, blob);
     } catch (err) {
       console.error("Print PDF 2D error:", err);
       alert("Error generating 2D PDF: " + err.message);
