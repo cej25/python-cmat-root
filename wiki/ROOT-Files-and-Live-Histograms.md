@@ -53,6 +53,7 @@ You can also paste a complete `root.json` URL into **Live ROOT / c4Root server**
 
 ```bash
 python3 pycmat --live 'http://localhost:1111/Histograms/LISA_FAST/SlowToT/h1_lisafast_slowToT_1/root.json' --port 8080
+python3 pycmat --live 'http://localhost:1111/Histograms/LISA_FAST/Fast_Vs._Slow/h2_lisafast_fast_v_slow_ToT_1/root.json' --port 8080
 ```
 
 ---
@@ -110,6 +111,8 @@ python3 pycmat --live-server http://127.0.0.1:1111 --host 127.0.0.1 --port 8080
 
 The **Live histograms** tree offers `Histograms/Demo/h1_energy` and `Histograms/Demo/h2_coincidences`. Set a gate around X = 300–344 keV to watch the Y peak grow as data accumulate, then try **Pause updates**, fit a peak, and **Resume updates**. Stopping the demo with Ctrl+C and restarting it also exercises disconnect/reconnect and histogram-reset handling.
 
+The demo 2D histogram is rectangular (256 X bins × 192 Y bins) with 4 keV X bins and 8 keV Y bins, and its simulated peak sits near X = 322 keV, Y = 804 keV. Both demo histograms remain in the tree, so you can switch between them without reconnecting or restarting; the display refreshes every 2 s by default (change it with the refresh selector), and the counts restart from zero when the demo is relaunched.
+
 ---
 
 ## Technical Notes and Limitations
@@ -125,21 +128,12 @@ The **Live histograms** tree offers `Histograms/Demo/h1_energy` and `Histograms/
 
 ## Validation
 
-The Python and JavaScript check suites cover ordinary, compact, base64 and gzip JSON; rectangular orientation/calibration; a 1000 × 2000 matrix; live gates and peak fits; pause/manual refresh; disconnect, reconnect, axis changes, histogram resets, and remembered server addresses; all three TH3 plane orientations; single/double gates and background subtraction; polygon and fit-derived cuts; and an exponential fit recovering a known 5 ns half-life:
-
-```bash
-python3 -m unittest discover -s tests -v
-node tests/test_root_cube_ui.cjs
-node tests/test_viewer_brand.cjs
-node tests/test_banana_overlay.cjs
-```
+Automated Python and JavaScript check suites validated ordinary, compact, base64 and gzip JSON; rectangular orientation/calibration; a 1000 × 2000 matrix; live gates and peak fits; pause/manual refresh; disconnect, reconnect, axis changes, histogram resets, and remembered server addresses; all three TH3 plane orientations; single/double gates and background subtraction; polygon and fit-derived cuts; and an exponential fit recovering a known 5 ns half-life. Full visual browser QA and end-to-end runs against a production c4Root server remain to be verified on the target setup.
 
 ---
 
 ## See Also
 
-- [LIVE_QUICKSTART.md](https://github.com/rlica/python-cmat/blob/main/LIVE_QUICKSTART.md) — live connections and the offline demo
-- [TH3_QUICKSTART.md](https://github.com/rlica/python-cmat/blob/main/TH3_QUICKSTART.md) — TH3 gating and time fitting in detail
 - [Interactive Web Viewer](Interactive-Web-Viewer) — 2D viewer internals
 - [3D Matrix Analysis & Web Viewer](3D-Matrix-Analysis-and-Web-Viewer) — 3D viewer internals
 - [Keyboard Shortcuts & Controls](Keyboard-Shortcuts-and-Navigation) — gate and polygon shortcuts

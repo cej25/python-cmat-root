@@ -293,7 +293,25 @@ The existing 3D interface can display any of the three orthogonal planes of a li
 
 **Shift+B** draws a background polygon. Applied peak polygons have solid yellow borders; background polygons have dashed pink borders. Axis calibration and units are taken from the ROOT histogram.
 
-Compact sparse TH3 data can be projected without expanding the entire cube. Memory use and refresh time still increase with histogram occupancy and transfer size.
+Compact sparse TH3 data can be projected without expanding the entire cube. Memory use and refresh time still increase with histogram occupancy and transfer size. An offline TH3 snapshot example is included for testing:
+
+```bash
+./pycmat --snapshot-th3 examples/sample_th3.json.gz --host 127.0.0.1 --port 8081
+```
+
+### Try It Without c4Root (Offline Demo)
+
+A built-in simulator mimics a ROOT HTTP source, so you can exercise the complete live workflow — histogram tree, gates, fits, pause/refresh — before connecting to real hardware:
+
+```bash
+# Terminal 1: simulated ROOT source (counts increase once per second)
+python3 live_root_demo.py --port 1111
+
+# Terminal 2: the viewer
+./pycmat --live-server http://127.0.0.1:1111 --host 127.0.0.1 --port 8080
+```
+
+Select `Histograms/Demo/h1_energy` (TH1) or `Histograms/Demo/h2_coincidences` (TH2) in the **Live histograms** tree and try the gate and fit controls with **Pause updates** / **Resume updates**.
 
 ### Help and Further Examples
 
@@ -303,7 +321,7 @@ Compact sparse TH3 data can be projected without expanding the entire cube. Memo
 
 If the launcher is not executable, use `python3 pycmat` with the same arguments.
 
-See [LIVE_QUICKSTART.md](LIVE_QUICKSTART.md) for live connections and the offline demo, and [TH3_QUICKSTART.md](TH3_QUICKSTART.md) for TH3 gating and time fitting. The page heading and browser tab show **ROOT visualiser** for ROOT inputs and **GASP visualiser** for CMAT inputs.
+Full details on ROOT file input, live c4Root connections, the offline demo, and TH3 gating and time fitting are in the [ROOT Files & Live Histograms wiki page](https://github.com/rlica/python-cmat/wiki/ROOT-Files-and-Live-Histograms). The page heading and browser tab show **ROOT visualiser** for ROOT inputs and **GASP visualiser** for CMAT inputs.
 
 ---
 
