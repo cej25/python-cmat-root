@@ -6005,7 +6005,7 @@
     content += `# Channel Energy_keV Counts Error\n`;
 
     for (let i = chStart; i <= chEnd; i++) {
-      let e = chToEnergy(i + 0.5, axis).toFixed(3);
+      let e = isAxisCalibrated(axis) ? chToEnergy(i + (metadata.root_histogram ? 0.5 : 0), axis).toFixed(3) : i.toFixed(3);
       let val = spec[i] || 0;
       let err = 1.0;
       if (isGatedCut && gate1DState.last_res) {

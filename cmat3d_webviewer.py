@@ -1281,9 +1281,14 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
             spec = spec0 if axis == 0 else (spec1 if axis == 1 else spec2)
 
             cal = session.get_cal(axis)
-            lines = [f"# Exported spectrum for {m['filename']} - Axis {axis}\n# Ch\tEnergy(keV)\tCounts\n"]
+            is_cal = session.is_calibrated(axis)
+            # ROOT cubes evaluate energy at bin centers (ch + 0.5); CMAT channels map directly.
+            ch_off = 0.5 if isinstance(reader, ROOTCubeReader) else 0.0
+            col = "Energy(keV)" if is_cal else "Coordinate(ch)"
+            lines = [f"# Exported spectrum for {m['filename']} - Axis {axis}\n# Ch\t{col}\tCounts\n"]
             for ch, val in enumerate(spec):
-                en = cal[0] + cal[1] * (ch + 0.5) + cal[2] * ((ch + 0.5) ** 2)
+                x = ch + ch_off
+                en = (cal[0] + cal[1] * x + cal[2] * (x ** 2)) if is_cal else ch
                 lines.append(f"{ch}\t{en:.3f}\t{val}\n")
 
             content = "".join(lines).encode("utf-8")

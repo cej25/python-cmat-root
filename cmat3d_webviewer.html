@@ -4147,7 +4147,7 @@
     if (axis === undefined) axis = 0;
     const spec = spec1D[axis];
     if (spec && spec.length > 0) {
-      const cal = getCalForAxis(axis);
+      const isCalAxis = isAxisCalibrated(axis);
       const axNames = [0,1,2].map(ax => metadata?.axis_labels?.[ax] || `Axis ${ax+1} (${'XYZ'[ax]})`);
       const mName = metadata ? (metadata.filename || 'matrix3d') : 'matrix3d';
       let tag = 'projection';
@@ -4155,9 +4155,9 @@
       else if (bananaGateActive && bananaGateResult) tag = 'banana_gate';
       else if (gates1D[0].w.length > 0 || gates1D[1].w.length > 0 || gates1D[2].w.length > 0) tag = 'gated';
 
-      let lines = [`# Exported spectrum for ${mName} - ${axNames[axis]} (${tag})\n# Ch\tCoordinate (${axisCoordinateUnit(axis)})\tCounts\tError\n`];
+      let lines = [`# Exported spectrum for ${mName} - ${axNames[axis]} (${tag})\n# Ch\tCoordinate (${isCalAxis ? axisCoordinateUnit(axis) : 'ch'})\tCounts\tError\n`];
       for (let ch = 0; ch < spec.length; ch++) {
-        const en = cal[0] + cal[1] * (ch + 0.5) + cal[2] * Math.pow(ch + 0.5, 2);
+        const en = isCalAxis ? chToEnergy(axis, ch) : ch;
         const val = spec[ch] || 0;
         const err = Math.sqrt(Math.max(val, 1.0));
         lines.push(`${ch}\t${en.toFixed(3)}\t${val}\t${err.toFixed(2)}\n`);
