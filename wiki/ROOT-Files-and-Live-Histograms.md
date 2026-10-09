@@ -83,7 +83,7 @@ Selecting a TH3 in the browser opens the 3D viewer at `/cube/` on the same serve
 2. Apply separate **W** peak gates on the two energy spectra — both must be satisfied — and optionally **X** background gates. Existing polygon cuts are also supported.
 3. Axis 3 shows the resulting time spectrum, which can be fitted for half-life with the popup when that axis represents time (leave its calibrated-coordinate selection active to fit in nanoseconds, with either model).
 
-**Shift+G** draws a peak polygon on the displayed matrix and **Shift+B** a background polygon. Applied peak polygons have solid yellow borders; background polygons have dashed pink borders, both with contrasting outlines and labels that remain visible during live refresh. Channel ranges stay in internal gate coordinates, while calibrated labels, bin centres, and half-life input use the ROOT physical values and units.
+Press **a** to add peak polygon vertices and **b** for background polygon vertices at the cursor on the displayed matrix. Applied peak polygons have solid yellow borders; background polygons have dashed pink borders, both with contrasting outlines and labels that remain visible during live refresh. Channel ranges stay in internal gate coordinates, while calibrated labels, bin centres, and half-life input use the ROOT physical values and units.
 
 Zooming the third spectrum limits that axis in the 2D display. Fits are snapshots and do not refit automatically — pause updates while analysing. Fit-derived Gamba cuts hold automatic refresh until cleared; **Refresh now** clears such a cut and updates the snapshot.
 

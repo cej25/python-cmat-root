@@ -588,6 +588,15 @@ def append_fit_result_line(filepath: str, line: str) -> bool:
                         f"{'Chi2':>{FIT_LOG_COL_W_CHI2}}  "
                         f"{'Peak_to_BG':>{FIT_LOG_COL_W_PBG}}\n"
                     )
+                    f.write(
+                        f"# 2D Bananas: {'Type':>9}  "
+                        f"{'Energy1':>{FIT_LOG_COL_W_ENERGY}}  "
+                        f"{'Energy2':>{FIT_LOG_COL_W_ENERGY}}  "
+                        f"{'Gross_Area':>{FIT_LOG_COL_W_AREA}}  "
+                        f"{'Net_Area(err)':>{FIT_LOG_COL_W_AREA}}  "
+                        f"{'Bg_Scale':>{FIT_LOG_COL_W_PBG}}  "
+                        f"{'Matrix'}\n"
+                    )
                 f.write(line.rstrip() + "\n")
             return True
         except Exception as e:
@@ -2472,6 +2481,120 @@ def print_banana_roi_terminal_report_2d(res: dict, matrix_name: str, matrix_shap
         print(f"  • Net Area Counts: {net_cts:,.1f} ± {net_err:,.1f} counts\n", flush=True)
     else:
         print(f"  • Total Counts:    {cts_peak:,} counts\n", flush=True)
+
+
+def _polygon_centroid(points: list) -> tuple:
+    """
+    Area-weighted centroid of a polygon; falls back to the vertex mean for degenerate polygons.
+    Accepts vertices as [x, y] pairs or as {'x': .., 'y': ..} dicts (as sent by the web viewers).
+    """
+    pts = []
+    for p in points or []:
+        if isinstance(p, dict):
+            pts.append((float(p.get("x", p.get(0, 0))), float(p.get("y", p.get(1, 0)))))
+        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+            pts.append((float(p[0]), float(p[1])))
+    if not pts:
+        return 0.0, 0.0
+    if len(pts) < 3:
+        n = len(pts)
+        return sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n
+    area2 = 0.0
+    cx = cy = 0.0
+    for (xa, ya), (xb, yb) in zip(pts, pts[1:] + pts[:1]):
+        cross = xa * yb - xb * ya
+        area2 += cross
+        cx += (xa + xb) * cross
+        cy += (ya + yb) * cross
+    if abs(area2) < 1e-12:
+        n = len(pts)
+        return sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n
+    cx /= (3.0 * area2)
+    cy /= (3.0 * area2)
+    return cx, cy
+
+
+def _banana_energy_pair(res: dict, key: str, session=None) -> tuple:
+    """Return (e1, e2, is_cal) for a banana polygon: calibrated x/y centroid energies (or channels)."""
+    cal_x = session.get_cal(0) if session else None
+    cal_y = session.get_cal(1) if session else None
+    is_cal = bool(session) and session.is_calibrated(0) and session.is_calibrated(1)
+    cx, cy = _polygon_centroid(res.get(key) or [])
+    if is_cal:
+        return ch_to_energy(cx, cal_x), ch_to_energy(cy, cal_y), True
+    return cx, cy, False
+
+
+def save_banana_files(res: dict, session=None, matrix_name: str = "") -> list:
+    """
+    Save peak/background banana polygons as 'p<E1>-<E2>.ban' / 'b<E1>-<E2>.ban' text files, where
+    E1/E2 are the calibrated x/y centroid coordinates of the polygon as integers (no decimal points).
+    Each file lists one 'x y' vertex pair per line in matrix channel coordinates, so it can be
+    re-loaded later. Files are written to the server working directory.
+    Returns the list of created filenames.
+    """
+    saved = []
+    for key, prefix, label in (("polygon_peak", "p", "Peak"), ("polygon_bg", "b", "Background")):
+        pts = res.get(key) or []
+        if len(pts) < 3:
+            continue
+        e1, e2, is_cal = _banana_energy_pair(res, key, session=session)
+        filename = f"{prefix}{int(round(e1))}-{int(round(e2))}.ban"
+        unit = "keV" if is_cal else "ch"
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(
+                    f"# CMAT {label} Banana gate | Matrix: {matrix_name} | "
+                    f"Centroid: ({e1:.2f}, {e2:.2f}) {unit} | "
+                    f"Saved: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
+                for p in pts:
+                    if isinstance(p, dict):
+                        vx, vy = float(p.get("x", p.get(0, 0))), float(p.get("y", p.get(1, 0)))
+                    else:
+                        vx, vy = float(p[0]), float(p[1])
+                    f.write(f"{vx:.1f} {vy:.1f}\n")
+            saved.append(filename)
+        except Exception as e:
+            print(f"[!] Error saving banana file {filename}: {e}", file=sys.stderr)
+    return saved
+
+
+def append_banana_result_to_file(res: dict, session=None, matrix_name: str = "", filepath: str = None) -> bool:
+    """Append 2D banana gate gross and net areas to the fit results text file when logging is enabled."""
+    if not filepath or not res or not res.get("success", False):
+        return False
+    if len(res.get("polygon_peak") or []) < 3:
+        return False
+
+    e1, e2, is_cal = _banana_energy_pair(res, "polygon_peak", session=session)
+    has_bg = res.get("has_bg", False)
+    gross = float(res.get("counts_peak", 0))
+    net = float(res.get("net_counts", gross))
+    net_err = res.get("net_err")
+    if net_err is None:
+        if has_bg:
+            net_err = math.sqrt(max(0.0, gross + (scale ** 2) * float(res.get("counts_bg", 0))))
+        else:
+            net_err = math.sqrt(max(0.0, gross))
+    net_err = float(net_err)
+    scale = float(res.get("scale", 0.0))
+
+    e1_str = f"{e1:.2f}" if is_cal else f"{e1:.3f}"
+    e2_str = f"{e2:.2f}" if is_cal else f"{e2:.3f}"
+    line = (
+        f"{'BANANA_BG' if has_bg else 'BANANA':>9}  "
+        f"{e1_str:>{FIT_LOG_COL_W_ENERGY}}  "
+        f"{e2_str:>{FIT_LOG_COL_W_ENERGY}}  "
+        f"{gross:>{FIT_LOG_COL_W_AREA}.0f}  "
+        f"{net:>{FIT_LOG_COL_W_AREA}.1f}({net_err:.1f})  "
+        f"{scale:>{FIT_LOG_COL_W_PBG}.4f}  "
+        f"{matrix_name}"
+    )
+    ok = append_fit_result_line(filepath, line)
+    if ok:
+        print(f"[*] Banana areas logged to {filepath}", flush=True)
+    return ok
 
 
 def ricker_wavelet(points: int, a: float) -> np.ndarray:
@@ -6199,8 +6322,16 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 polygon_bg = []
 
             res = compute_2d_banana_roi(self.matrix, polygon_peak=polygon_peak, polygon_bg=polygon_bg)
-            if res.get("success") and (res.get("pixel_count_peak", 0) > 0 or res.get("pixel_count_bg", 0) > 0):
-                print_banana_roi_terminal_report_2d(res, self.reader.filename.name, self.matrix.shape)
+            if res.get("success"):
+                if res.get("pixel_count_peak", 0) > 0 or res.get("pixel_count_bg", 0) > 0:
+                    print_banana_roi_terminal_report_2d(res, self.reader.filename.name, self.matrix.shape)
+                    session = self.get_session()
+                    res["saved_files"] = save_banana_files(res, session=session, matrix_name=self.reader.filename.name)
+                    if session.fit_log_enabled:
+                        append_banana_result_to_file(res, session=session, matrix_name=self.reader.filename.name, filepath=session.fit_log_filename)
+                elif len(polygon_peak) >= 3 or len(polygon_bg) >= 3:
+                    sh_y, sh_x = self.matrix.shape[:2]
+                    print(f"[!] 2D Banana ROI falls outside {self.reader.filename.name} ({sh_x}×{sh_y}): no pixels selected.", flush=True)
 
             self.send_response(200)
             self.send_header("Content-type", "application/json")

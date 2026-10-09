@@ -69,6 +69,8 @@ from cmat_webviewer import (
     append_fit_1d_result_to_file,
     append_fit_2d_result_to_file,
     get_default_fit_log_filename,
+    save_banana_files,
+    append_banana_result_to_file,
 )
 
 CONFIG_FILENAME = "python-cmat3d-config.txt"
@@ -165,6 +167,26 @@ def print_gate_terminal_report_3d(gate_res: dict, matrix_name: str, target_axis:
         print(f"  • Gate 1: W={gate_specs[g1].get('w', [])}, B={gate_specs[g1].get('b', [])} (scale: {gate_res.get('scale_1', 0.0):.4f})")
         print(f"  • Gate 2: W={gate_specs[g2].get('w', [])}, B={gate_specs[g2].get('b', [])} (scale: {gate_res.get('scale_2', 0.0):.4f})")
         print(f"  • Counts: Net={sum(gate_res.get('net_spec', [])):,.1f} cts\n", flush=True)
+
+
+PLANE_AXES_3D = {"0-1": (0, 1), "0-2": (0, 2), "1-2": (1, 2)}
+
+
+class _PlaneCalAdapter:
+    """Expose the calibrations of a cube plane's two axes through the get_cal/is_calibrated
+    interface expected by the banana savefile/logging helpers in cmat_webviewer, so that the
+    .ban filenames and logged energies refer to the plane's x/y axes (axis 0 = plane x, 1 = plane y)."""
+
+    def __init__(self, session: "MatrixSession3D", plane: str):
+        ax_x, ax_y = PLANE_AXES_3D.get(str(plane).strip(), (0, 1))
+        self._session = session
+        self._axes = {0: ax_x, 1: ax_y}
+
+    def get_cal(self, axis: int) -> list:
+        return self._session.get_cal(self._axes[axis])
+
+    def is_calibrated(self, axis: int) -> bool:
+        return self._session.is_calibrated(self._axes[axis])
 
 
 def print_banana_gate_terminal_report_3d(res: dict, matrix_name: str):
@@ -828,8 +850,16 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                 polygon_bg = []
 
             res = compute_2d_banana_gate(reader, plane, polygon_peak=polygon_peak, polygon_bg=polygon_bg)
-            if res.get("success") and (res.get("pixel_count_peak", 0) > 0 or res.get("pixel_count_bg", 0) > 0):
-                print_banana_gate_terminal_report_3d(res, m["filename"])
+            if res.get("success"):
+                if res.get("pixel_count_peak", 0) > 0 or res.get("pixel_count_bg", 0) > 0:
+                    print_banana_gate_terminal_report_3d(res, m["filename"])
+                    cal = _PlaneCalAdapter(session, plane)
+                    matrix_label = f"{m['filename']} (plane {plane})"
+                    res["saved_files"] = save_banana_files(res, session=cal, matrix_name=matrix_label)
+                    if session.fit_log_enabled:
+                        append_banana_result_to_file(res, session=cal, matrix_name=matrix_label, filepath=session.fit_log_filename)
+                elif len(polygon_peak) >= 3 or len(polygon_bg) >= 3:
+                    print(f"[!] 2D Banana gate falls outside {m['filename']} (plane {plane}): no pixels selected.", flush=True)
 
             self.send_response(200)
             self.send_header("Content-type", "application/json")

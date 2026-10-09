@@ -804,8 +804,8 @@
         Draw closed polygon on 2D plane to project onto 3rd axis. Background banana is subtracted normalized by surface areas.
       </div>
       <div style="display:flex; gap:6px; margin-top:4px;">
-        <button id="btnDrawBananaPeak" style="flex:1; background:#33691e; color:#ccff90; border-color:#64dd17;" onclick="toggleBananaMode('peak')">Draw Peak [Shift+G]</button>
-        <button id="btnDrawBananaBg" style="flex:1; background:#880e4f; color:#f8bbd0; border-color:#ad1457;" onclick="toggleBananaMode('bg')">Draw Bg [Shift+B]</button>
+        <button id="btnDrawBananaPeak" style="flex:1; background:#33691e; color:#ccff90; border-color:#64dd17;" onclick="toggleBananaMode('peak')">Draw Peak [a]</button>
+        <button id="btnDrawBananaBg" style="flex:1; background:#880e4f; color:#f8bbd0; border-color:#ad1457;" onclick="toggleBananaMode('bg')">Draw Bg [b]</button>
       </div>
       <div style="display:flex; gap:6px; margin-top:4px;">
         <button class="secondary" style="flex:1;" onclick="clearBananaGate()">Clear Bananas [Z]</button>
@@ -925,8 +925,8 @@
       <div class="panel-2d-toolbar">
         <span id="panel2DTitle" style="font-weight:700; color:#00e5ff;">2D Coincidence Plane: Axis 1 vs Axis 2</span>
         <div style="display:flex; gap:6px; align-items:center;">
-          <button id="btnBananaPeak2D" class="secondary" style="color:#ffd600; border-color:#fbc02d; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('peak')">Peak Banana</button>
-          <button id="btnBananaBg2D" class="secondary" style="color:#ff4081; border-color:#f50057; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('bg')">Bg Banana</button>
+          <button id="btnBananaPeak2D" class="secondary" style="color:#ffd600; border-color:#fbc02d; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('peak')" title="Draw Peak Banana Gate [a]">Peak Banana</button>
+          <button id="btnBananaBg2D" class="secondary" style="color:#ff4081; border-color:#f50057; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('bg')" title="Draw Background Banana Gate [b]">Bg Banana</button>
           <button id="btnScaleToggle2D" class="scale-toggle-btn" onclick="cycle2DScale()">LOG</button>
           <button class="btn-pdf" onclick="exportPDF2D()">Print 2D PDF</button>
         </div>
@@ -1126,12 +1126,12 @@
       <tr><td><kbd>↑</kbd> <kbd>↓</kbd> in 1D</td><td>Zoom vertical scale (↑ taller peaks, ↓ shorter peaks)</td></tr>
       <tr><td><kbd>E</kbd> / <kbd>e</kbd></td><td>Expand / Zoom into set limits</td></tr>
       <tr><td><kbd>F</kbd> / <kbd>f</kbd></td><td>Full matrix / spectrum view reset</td></tr>
-      <tr><td><kbd>Shift+G</kbd></td><td>Draw Peak Banana Gate on 2D plane (W)</td></tr>
-      <tr><td><kbd>Shift+B</kbd></td><td>Draw Background Banana Gate on 2D plane (B)</td></tr>
+      <tr><td><kbd>a</kbd></td><td>Add Peak Banana Gate vertex at cursor on 2D plane (W); polygon auto-closes, <kbd>Enter</kbd> applies</td></tr>
+      <tr><td><kbd>b</kbd></td><td>Add Background Banana Gate vertex at cursor on 2D plane (B); polygon auto-closes, <kbd>Enter</kbd> applies</td></tr>
       <tr><td><kbd>W</kbd> / <kbd>w</kbd></td><td>Set 1D Coincidence Peak Gate (Limit 1, Limit 2)</td></tr>
       <tr><td><kbd>X</kbd> / <kbd>x</kbd></td><td>Set 1D Coincidence Background Gate (Limit 1, Limit 2)</td></tr>
       <tr><td><kbd>Z</kbd> / <kbd>z</kbd></td><td>Cancel pending gate or clear active 1D / 2D gates</td></tr>
-      <tr><td><kbd>B</kbd> / <kbd>b</kbd></td><td>In 1D: Set background region; In 2D: Draw Background Banana</td></tr>
+      <tr><td><kbd>B</kbd> / <kbd>b</kbd></td><td>In 1D: Set background region; In 2D: Add Background Banana point at cursor (starts drawing if none active)</td></tr>
       <tr><td><kbd>R</kbd> / <kbd>r</kbd></td><td>Set 1D Fit / Integration Region limits</td></tr>
       <tr><td><kbd>I</kbd> / <kbd>i</kbd></td><td>Integrate peak over Region ('R') subtracting background</td></tr>
       <tr><td><kbd>V</kbd> / <kbd>v</kbd></td><td>Fit single peak at cursor (1D or 2D coincidence peak with 3D Gamba cut)</td></tr>
@@ -1278,6 +1278,40 @@
   let bananaPolygonBg = []; // [{x, y}]
   let bananaGateActive = false;
   let bananaGateResult = null;
+
+  // Per-plane banana memory: each plane remembers its own drawing/gate, so switching
+  // planes (Tab / plane buttons) restores and re-applies that plane's banana.
+  const bananaStateByPlane = {
+    '0-1': { mode: null, polyPeak: [], polyBg: [], active: false, result: null },
+    '0-2': { mode: null, polyPeak: [], polyBg: [], active: false, result: null },
+    '1-2': { mode: null, polyPeak: [], polyBg: [], active: false, result: null },
+  };
+
+  function saveBananaState() {
+    const s = bananaStateByPlane[activePlane];
+    if (!s) return;
+    s.mode = bananaMode;
+    s.polyPeak = bananaPolygonPeak;
+    s.polyBg = bananaPolygonBg;
+    s.active = bananaGateActive;
+    s.result = bananaGateResult;
+  }
+
+  function loadBananaState() {
+    const s = bananaStateByPlane[activePlane];
+    if (!s) return;
+    bananaMode = s.mode;
+    bananaPolygonPeak = s.polyPeak;
+    bananaPolygonBg = s.polyBg;
+    bananaGateActive = s.active;
+    bananaGateResult = s.result;
+  }
+
+  function resetAllBananaStates() {
+    for (const pl of Object.keys(bananaStateByPlane)) {
+      Object.assign(bananaStateByPlane[pl], { mode: null, polyPeak: [], polyBg: [], active: false, result: null });
+    }
+  }
   let gambaGateActive = false;
   let gambaGateResult = null;
 
@@ -1685,13 +1719,13 @@
       const res = await fetch(`/api/set_plane?plane=${plane}`);
       const data = await res.json();
       if (data.active_plane) {
+        saveBananaState(); // persist the outgoing plane's banana before switching
         activePlane = data.active_plane;
         const shape = metadata.shape || [4096, 4096, 128];
         const plAxes = getPlaneAxes(activePlane);
         view2D.x0 = 0; view2D.x1 = shape[plAxes.x];
         view2D.y0 = 0; view2D.y1 = shape[plAxes.y];
         markers = { left: null, right: null, down: null, up: null };
-        clearBananaGate();
         activeFits2D = [];
         fit2DResult = null;
 
@@ -1702,9 +1736,22 @@
 
         updatePanelTitles();
         updateOverlayStatus();
+        loadBananaState(); // restore the incoming plane's own banana
+        updateBananaUI();
         await fetchProjections();
         await fetchTileAndRender();
+
         showMatrixToast(`Switched to Plane ${activePlane} (${plAxes.nameX} vs ${plAxes.nameY})`);
+
+        // Re-apply this plane's banana gate on the newly selected plane
+        if ((bananaPolygonPeak && bananaPolygonPeak.length >= 3) || (bananaPolygonBg && bananaPolygonBg.length >= 3)) {
+          bananaGateActive = false;
+          bananaGateResult = null;
+          await requestBananaGate();
+          showMatrixToast(`Plane ${activePlane}: banana gate re-applied`);
+        } else if (bananaMode) {
+          showMatrixToast(`Plane ${activePlane}: banana drawing in progress restored`);
+        }
       }
     } catch (e) {
       console.error("setPlane failed:", e);
@@ -1713,12 +1760,33 @@
 
   async function switchMatrix(index) {
     try {
+      const prevShape = metadata?.shape;
+      const hadBananas = (bananaPolygonPeak && bananaPolygonPeak.length > 0) || (bananaPolygonBg && bananaPolygonBg.length > 0) || bananaGateActive;
       const res = await fetch(`/api/select_matrix?matrix=${index}`);
       const data = await res.json();
       if (data.loaded) {
         metadata = data;
+        const sameShape = Array.isArray(prevShape) && Array.isArray(data.shape) &&
+          prevShape.length === data.shape.length && prevShape.every((v, i) => v === data.shape[i]);
         clear1DGates(false);
-        clearBananaGate();
+        if (hadBananas && sameShape) {
+          // Banana gates cycle with the active matrix: re-apply and re-report on the new matrix.
+          // Other planes keep their polygons but their cached results are stale until re-applied.
+          for (const pl of Object.keys(bananaStateByPlane)) {
+            if (pl !== activePlane) {
+              bananaStateByPlane[pl].active = false;
+              bananaStateByPlane[pl].result = null;
+            }
+          }
+          bananaGateActive = false;
+          bananaGateResult = null;
+          await requestBananaGate();
+          saveBananaState();
+        } else {
+          clearBananaGate();
+          resetAllBananaStates();
+          if (hadBananas) showMatrixToast("Matrix dimensions changed — Banana gates were cleared");
+        }
         clearAllFits();
         updateUIWithMetadata();
         await fetchProjections();
@@ -2105,10 +2173,10 @@
     bananaMode = type;
     if (type === 'peak') {
       bananaPolygonPeak = [];
-      showMatrixToast("Click points on 2D plane to draw Peak Banana ROI (W)");
+      showMatrixToast("Press 'a' to add Peak Banana (W) points — Enter applies the gate");
     } else {
       bananaPolygonBg = [];
-      showMatrixToast("Click points on 2D plane to draw Background Banana ROI (B)");
+      showMatrixToast("Press 'b' to add Background Banana (B) points — Enter applies the gate");
     }
     updateBananaUI();
     render2D();
@@ -2127,11 +2195,11 @@
       if (bananaMode === 'peak') {
         btnPeak.style.background = '#ffd600';
         btnPeak.style.color = '#000';
-        btnPeak.innerText = 'Close Peak Banana (Click Start)';
+        btnPeak.innerText = 'Finish Peak Banana (Enter)';
       } else {
         btnPeak.style.background = '#33691e';
         btnPeak.style.color = '#ccff90';
-        btnPeak.innerText = 'Draw Peak [Shift+G]';
+        btnPeak.innerText = 'Draw Peak [a]';
       }
     }
 
@@ -2139,11 +2207,11 @@
       if (bananaMode === 'bg') {
         btnBg.style.background = '#ff4081';
         btnBg.style.color = '#fff';
-        btnBg.innerText = 'Close Bg Banana (Click Start)';
+        btnBg.innerText = 'Finish Bg Banana (Enter)';
       } else {
         btnBg.style.background = '#880e4f';
         btnBg.style.color = '#f8bbd0';
-        btnBg.innerText = 'Draw Bg [Shift+B]';
+        btnBg.innerText = 'Draw Bg [b]';
       }
     }
 
@@ -2191,11 +2259,44 @@
     bananaPolygonBg = [];
     bananaGateActive = false;
     bananaGateResult = null;
+    saveBananaState(); // keep the per-plane store in sync
     updateBananaUI();
     fetchProjections();
     recomputeGates();
     render2D();
     showMatrixToast("Banana gates cleared");
+  }
+
+  async function requestBananaGate() {
+    try {
+      const pStr = encodeURIComponent(JSON.stringify(bananaPolygonPeak));
+      const bStr = encodeURIComponent(JSON.stringify(bananaPolygonBg));
+      const url = `/api/banana_gate?plane=${activePlane}&polygon_peak=${pStr}&polygon_bg=${bStr}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.success) {
+        bananaGateActive = true;
+        bananaGateResult = data;
+        updateBananaUI();
+
+        const plAxes = getPlaneAxes(activePlane);
+        const saved = (data.saved_files && data.saved_files.length) ? ` — saved ${data.saved_files.join(', ')}` : '';
+        if (data.has_bg) {
+          showMatrixToast(`Banana Gate: Peak (${data.pixel_count_peak} px) - Bg (${data.pixel_count_bg} px, scale ${data.scale.toFixed(3)}) => ${plAxes.nameZ}${saved}`);
+        } else {
+          showMatrixToast(`Peak Banana: ${data.total_gated_counts.toLocaleString()} cts on ${plAxes.nameZ}${saved}`);
+        }
+        await recomputeGates();
+        render2D();
+        return true;
+      } else {
+        showMatrixToast(data.error || "Banana gating failed", true);
+        return false;
+      }
+    } catch (e) {
+      console.error("Banana gate request failed:", e);
+      return false;
+    }
   }
 
   async function applyBananaGate() {
@@ -2207,32 +2308,26 @@
       return;
     }
 
-    try {
-      const pStr = encodeURIComponent(JSON.stringify(bananaPolygonPeak));
-      const bStr = encodeURIComponent(JSON.stringify(bananaPolygonBg));
-      const url = `/api/banana_gate?plane=${activePlane}&polygon_peak=${pStr}&polygon_bg=${bStr}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.success) {
-        bananaGateActive = true;
-        bananaGateResult = data;
-        bananaMode = null;
-        updateBananaUI();
-
-        const plAxes = getPlaneAxes(activePlane);
-        if (data.has_bg) {
-          showMatrixToast(`Banana Gate: Peak (${data.pixel_count_peak} px) - Bg (${data.pixel_count_bg} px, scale ${data.scale.toFixed(3)}) => ${plAxes.nameZ}`);
-        } else {
-          showMatrixToast(`Peak Banana: ${data.total_gated_counts.toLocaleString()} cts on ${plAxes.nameZ}`);
-        }
-        await recomputeGates();
-        render2D();
-      } else {
-        showMatrixToast(data.error || "Banana gating failed", true);
-      }
-    } catch (e) {
-      console.error("Banana gate request failed:", e);
+    const ok = await requestBananaGate();
+    if (ok) {
+      bananaMode = null;
+      updateBananaUI();
     }
+  }
+
+  function addBananaPointAtCursor(type) {
+    const activePoly = (type === 'peak') ? bananaPolygonPeak : bananaPolygonBg;
+
+    if (bananaMode !== type) {
+      toggleBananaMode(type);
+    }
+    const pt = { x: Math.round(cursor2D.x), y: Math.round(cursor2D.y) };
+    // Ignore duplicate vertices (e.g. pressing 'a' twice without moving the cursor)
+    const last = activePoly[activePoly.length - 1];
+    if (last && last.x === pt.x && last.y === pt.y) return;
+    if (type === 'peak') bananaPolygonPeak.push(pt); else bananaPolygonBg.push(pt);
+    updateBananaUI();
+    render2D();
   }
 
   // --- Peak Finding & Fitting (1D & 2D) ---
@@ -2833,7 +2928,7 @@
       if (Math.max(...xs) < pr.x || Math.min(...xs) > pr.x + pr.w ||
           Math.max(...ys) < pr.y || Math.min(...ys) > pr.y + pr.h) return;
       const color = isBg ? '#ff4081' : '#ffe600';
-      const closed = !isDrawing && points.length >= 3;
+      const closed = points.length >= 3;
       ctx.save();
       ctx.beginPath(); ctx.rect(pr.x, pr.y, pr.w, pr.h); ctx.clip();
       ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -2853,8 +2948,8 @@
       ctx.setLineDash([]);
       for (let i = 0; i < points.length; i++) {
         const point = points[i];
-        ctx.beginPath(); ctx.arc(point.x, point.y, isDrawing ? 4.5 : 3, 0, 2 * Math.PI);
-        ctx.fillStyle = i === 0 && isDrawing ? '#00e676' : color; ctx.fill();
+        ctx.beginPath(); ctx.arc(point.x, point.y, 3, 0, 2 * Math.PI);
+        ctx.fillStyle = color; ctx.fill();
         ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke();
       }
       const label = `${isBg ? 'Background gate' : 'Peak gate'}${isDrawing ? ' (drawing)' : bananaGateActive ? ' (applied)' : ''}`;
@@ -4663,7 +4758,6 @@
 
     canvas2d.addEventListener('mousedown', (e) => {
       setFocusPanel('2d');
-      if (bananaMode) return;
       if (e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
         const pr = getPlotRect2D();
         const r = canvas2d.getBoundingClientRect();
@@ -4696,28 +4790,6 @@
         const ex = isCalX ? ` (${chToEnergy(plAxes.x, cursor2D.x).toFixed(1)} ${axisCoordinateUnit(plAxes.x)})` : '';
         const ey = isCalY ? ` (${chToEnergy(plAxes.y, cursor2D.y).toFixed(1)} ${axisCoordinateUnit(plAxes.y)})` : '';
         hud.innerText = `2D [Plane ${activePlane}]: ${plAxes.nameX}=ch ${cursor2D.x}${ex} | ${plAxes.nameY}=ch ${cursor2D.y}${ey}`;
-      }
-    });
-
-    canvas2d.addEventListener('click', (e) => {
-      if (bananaMode) {
-        const r = canvas2d.getBoundingClientRect();
-        const ch = pxToCh2D(e.clientX - r.left, e.clientY - r.top);
-        const pt = { x: Math.round(ch.x), y: Math.round(ch.y) };
-
-        const activePoly = (bananaMode === 'peak') ? bananaPolygonPeak : bananaPolygonBg;
-        if (activePoly.length >= 3) {
-          const p0 = activePoly[0];
-          const dist = Math.hypot(pt.x - p0.x, pt.y - p0.y);
-          const spanX = view2D.x1 - view2D.x0;
-          if (dist < spanX * 0.035) {
-            bananaMode = null;
-            applyBananaGate();
-            return;
-          }
-        }
-        activePoly.push(pt);
-        render2D();
       }
     });
 
@@ -5014,7 +5086,7 @@
 
       // Classic GASPware Commands
       if (k === 'e') expandMarkers();
-      else if (k === 'f' || k === 'a') {
+      else if (k === 'f') {
         if (targetPanel.startsWith('1d-')) {
           const ax = parseInt(targetPanel.split('-')[1], 10);
           zoomFull1D(ax);
@@ -5035,9 +5107,16 @@
       else if (e.key === '=' || e.key === '+') clearAllFits();
       else if (k === 'w') handleGateKeyPress('w');
       else if (k === 'x') handleGateKeyPress('x');
+      else if (k === 'a') {
+        if (targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {
+          addBananaPointAtCursor('peak');
+        } else {
+          zoomFull();
+        }
+      }
       else if (k === 'b') {
-        if (e.shiftKey || targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {
-          toggleBananaMode('bg');
+        if (targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {
+          addBananaPointAtCursor('bg');
         } else {
           handleFitBgKeyPress();
         }
@@ -5053,9 +5132,7 @@
         searchPeaks1D(activeAxis);
       }
       else if (k === 'g') {
-        if (e.shiftKey) {
-          toggleBananaMode('peak');
-        } else {
+        if (!e.shiftKey) {
           let activeAxis = targetPanel.startsWith('1d-') ? parseInt(targetPanel.split('-')[1], 10) : (hovered1DAxis !== null ? hovered1DAxis : null);
           let activeCh = (activeAxis !== null) ? cursorChannel1D[activeAxis] : null;
           if (activeAxis === null && isMouseOver2D) {

@@ -48,7 +48,7 @@ The server binds to `http://0.0.0.0:8080` (or the configured host/port) and auto
 |  | 2D Density Heatmap Canvas |   | Triple 1D Spectroscopic Displays            |  |
 |  | - Turbo/Viridis LUT Engine|   | - Det 1 (Axis 0) Stepped Histogram          |  |
 |  | - Multi-Plane: 0-1, 0-2, 1-2 | - Det 2 (Axis 1) Stepped Histogram          |  |
-|  | - 2D Banana ROI (Shift+G) |   | - Rings / dt (Axis 2) Stepped Histogram     |  |
+|  | - 2D Banana ROI (a/b) |   | - Rings / dt (Axis 2) Stepped Histogram     |  |
 |  | - AbortController Sync   |   | - 60 FPS Client-Side Instant Channel Zoom   |  |
 |  +---------------------------+   +---------------------------------------------+  |
 +-----------------------------------------------------------------------------------+
@@ -102,10 +102,10 @@ $$\text{Net Spec}(i) = \text{Raw Gate}(i) - \frac{\sum \text{Peak Gate Widths}}{
 
 - Press **`Z`** or click **Clear Gate** to reset active coincidence gates.
 
-### 2D Banana Gate Polygon Engine (`Shift + G` / `Shift + B`)
+### 2D Banana Gate Polygon Engine (`a` / `b`)
 For particle-gamma identification, ring discrimination, or kinematic curve gating:
-1. **Draw Peak Banana (W)**: Press **`Shift + G`** (or click **Draw Peak [Shift+G]**). Click points on the active 2D plane to define the Peak ROI polygon (rendered in gold `#ffd600`). Close the polygon by clicking near the starting vertex or pressing **`Enter`**.
-2. **Draw Background Banana (B)**: Press **`Shift + B`** (or click **Draw Bg [Shift+B]**). Click points on the 2D plane to define the Background ROI polygon (rendered in magenta `#ff4081`). Close the polygon by clicking near the starting vertex or pressing **`Enter`**.
+1. **Draw Peak Banana (W)**: Press **`a`** with the cursor over the active 2D plane to start drawing and add the first Peak ROI vertex (rendered in gold `#ffd600`); each further **`a`** press adds a vertex at the cursor position. The polygon auto-closes (the last vertex connects back to the first) — press **`Enter`** to apply the gate. Mouse click-drag zoom/pan keeps working while drawing.
+2. **Draw Background Banana (B)**: Press **`b`** with the cursor over the 2D plane to add Background ROI vertices (rendered in magenta `#ff4081`) the same way; press **`Enter`** to apply.
 3. **Area-Normalized Subtraction**:
    The viewer computes the continuous geometric surface area (in $\text{ch}^2$ via the Shoelace algorithm) and discrete rasterized pixel count ($\text{px}$) for both polygons. It normalizes background subtraction by the ratio of their surface areas:
 
@@ -121,6 +121,10 @@ For particle-gamma identification, ring discrimination, or kinematic curve gatin
      • Net Area Counts: 100,000.0 counts
    ```
 5. **Clear Gate**: Click **Clear Bananas** or press **`Z`** to remove active banana gates.
+6. **Banana Save Files (`.ban`)**: Every applied banana gate is automatically saved to the server working directory as `p<E1>-<E2>.ban` (peak) / `b<E1>-<E2>.ban` (background), where `E1`/`E2` are the calibrated centroid coordinates of the polygon on the plane's two axes as integers (channels if uncalibrated). Each file lists one `x y` vertex pair per line in channel coordinates.
+7. **Result Logging**: When fit results logging is enabled (`fit_log on [filename]`), the gross peak area and the net background-subtracted area (± error) of every applied banana gate are appended to the results `.txt` file, tagged with the active plane.
+8. **Matrix Cycling**: Banana gates are re-applied automatically when the active matrix is switched (`[` / `]`) with unchanged dimensions: the diagnostic report is re-printed for the new matrix and the 1D gated spectrum is refreshed. If the new matrix has different dimensions, the bananas are cleared with a notification.
+9. **Per-Plane Memory**: Each plane (`0-1`, `0-2`, `1-2`) remembers its own banana gates and in-progress drawings. Switching planes (`Tab` or the plane buttons) restores that plane's banana and re-applies it automatically; `Z` clears only the active plane's banana.
 
 ---
 

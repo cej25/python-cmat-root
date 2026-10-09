@@ -119,8 +119,8 @@ Click **`Print PDF`** on the 2D matrix footer or either 1D projection header:
 ### 8. 2D Banana ROIs & Area Determination (Peak & Background Subtraction)
 For irregular or curve-shaped features on the 2D coincidence matrix (e.g. bananas, Doppler-shifted diagonal ridges, or non-rectangular regions of interest), `cmat_webviewer` provides interactive polygonal ROI drawing with area-normalized background subtraction and terminal reporting:
 
-- **Draw Peak Banana (W)**: Press **`Shift + G`** (or click **Draw Peak [Shift+G]** in the 2D footer or sidebar). Click vertices on the 2D matrix canvas to trace the Peak ROI boundary (rendered in gold `#ffd600`). Close the polygon by clicking near the starting vertex or pressing **`Enter`**.
-- **Draw Background Banana (B)**: Press **`Shift + B`** (or click **Draw Bg [Shift+B]**). Click vertices on the 2D matrix canvas to trace the Background ROI boundary (rendered in magenta `#ff4081`). Close with **`Enter`** or by clicking near the start vertex.
+- **Draw Peak Banana (W)**: Move the cursor over the 2D matrix and press **`a`** to start drawing and add the first Peak ROI vertex (rendered in gold `#ffd600`); each further **`a`** press adds a vertex at the cursor position. The polygon auto-closes (the last vertex connects back to the first) — press **`Enter`** to apply the ROI. Mouse click-drag zoom/pan keeps working while drawing.
+- **Draw Background Banana (B)**: Press **`b`** with the cursor over the 2D matrix to add Background ROI vertices (rendered in magenta `#ff4081`) the same way; press **`Enter`** to apply. Over a 1D spectrum, **`b`** still sets the background region for fits.
 - **Area-Normalized Subtraction**:
   - Exact discrete pixel containment ($N_{\text{px}}$) and continuous geometric Shoelace area ($A\ \text{ch}^2$) are calculated for both polygons.
   - Scale factor: $\text{Scale} = \text{Area}_{\text{peak}} / \text{Area}_{\text{bg}}$.
@@ -140,6 +140,9 @@ For irregular or curve-shaped features on the 2D coincidence matrix (e.g. banana
     ================================================================================
     ```
 - **Clear Banana ROIs**: Press **`Z`** (or click **Clear Bananas**) to remove both peak and background polygons and reset the display.
+- **Banana Save Files (`.ban`)**: Every applied banana is automatically saved to the server working directory as `p<E1>-<E2>.ban` (peak) / `b<E1>-<E2>.ban` (background), where `E1`/`E2` are the calibrated x/y centroid coordinates of the polygon as integers (channels if uncalibrated). Each file lists one `x y` vertex pair per line in matrix channel coordinates.
+- **Result Logging**: When fit results logging is enabled (`fit_log on [filename]` in the terminal, or the sidebar toggle), the gross peak area and the net background-subtracted area (± error) of every applied banana are appended to the results `.txt` file.
+- **Matrix Cycling**: Banana ROIs are re-applied automatically when the active matrix is switched (`[` / `]` or the matrix dropdown): the diagnostic summary is re-printed for the new matrix and the on-screen badge/sidebar readout is refreshed. If the new matrix has different dimensions, the bananas are cleared with a notification.
 
 ### 9. Automatic 2D Coincidence Peak Search (`P` in 2D)
 Press **`P`** while focusing the 2D matrix (or click **`Find 2D Peaks [P]`** in the 2D matrix footer or Sidebar Section 4.3):

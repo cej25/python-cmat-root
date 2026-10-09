@@ -891,8 +891,8 @@
         Draw closed polygon on 2D matrix for area integration and area-normalized background subtraction.
       </div>
       <div style="display:flex; gap:6px; margin-top:4px;">
-        <button id="btnDrawBananaPeak" style="flex:1; background:#33691e; color:#ccff90; border-color:#64dd17;" onclick="toggleBananaMode('peak')">Draw Peak [Shift+G]</button>
-        <button id="btnDrawBananaBg" style="flex:1; background:#880e4f; color:#f8bbd0; border-color:#ad1457;" onclick="toggleBananaMode('bg')">Draw Bg [Shift+B]</button>
+        <button id="btnDrawBananaPeak" style="flex:1; background:#33691e; color:#ccff90; border-color:#64dd17;" onclick="toggleBananaMode('peak')">Draw Peak [a]</button>
+        <button id="btnDrawBananaBg" style="flex:1; background:#880e4f; color:#f8bbd0; border-color:#ad1457;" onclick="toggleBananaMode('bg')">Draw Bg [b]</button>
       </div>
       <div style="display:flex; gap:6px; margin-top:4px;">
         <button id="btnClearBanana" class="secondary" style="flex:1;" onclick="clearBananaROI()">Clear Bananas [Z]</button>
@@ -989,8 +989,8 @@
         <span id="overlayStatus">Limits: [L: - | R: - | D: - | U: -] &nbsp;•&nbsp; 'E' Expand &nbsp;•&nbsp; 'F' Full View</span>
         <div style="display: flex; gap: 6px; align-items: center;">
           <button id="btnFindPeaks2DFooter" class="secondary" style="color:#ff4081; border-color:#f50057; padding:2px 7px; font-size:0.75rem;" onclick="searchPeaks2D()" title="Automatically detect 2D coincidence photopeaks and reject Compton scattering [P on 2D]">Find 2D Peaks [P]</button>
-          <button id="btnBananaPeak2D" class="secondary" style="color:#ffd600; border-color:#fbc02d; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('peak')" title="Draw Peak Banana ROI [Shift+G]">Peak Banana</button>
-          <button id="btnBananaBg2D" class="secondary" style="color:#ff4081; border-color:#f50057; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('bg')" title="Draw Background Banana ROI [Shift+B]">Bg Banana</button>
+          <button id="btnBananaPeak2D" class="secondary" style="color:#ffd600; border-color:#fbc02d; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('peak')" title="Draw Peak Banana ROI [a]">Peak Banana</button>
+          <button id="btnBananaBg2D" class="secondary" style="color:#ff4081; border-color:#f50057; padding:2px 7px; font-size:0.75rem;" onclick="toggleBananaMode('bg')" title="Draw Background Banana ROI [b]">Bg Banana</button>
           <button id="btnScaleToggle2D" class="scale-toggle-btn" title="Cycle 2D Scale Mode: Logarithmic → Linear → Power [L]">LOG</button>
           <button id="btnPrintPDF2D" class="btn-pdf" title="Print Publication 2D Coincidence Matrix PDF">Print PDF</button>
           <span style="color: #777;">Click &amp; Drag to box-zoom</span>
@@ -1173,8 +1173,8 @@
     <tr><td>C / c</td><td>Cycle colormaps</td></tr>
     <tr><td>W / w</td><td>Set Coincidence Peak Gate limits (consecutive pairs: left &amp; right) on 1D spectrum</td></tr>
     <tr><td>X / x</td><td>Set Coincidence Background Gate limits (consecutive pairs: left &amp; right) on 1D spectrum</td></tr>
-    <tr><td>Shift + G</td><td>Draw Peak Banana ROI on 2D matrix (W, gold)</td></tr>
-    <tr><td>Shift + B</td><td>Draw Background Banana ROI on 2D matrix (B, magenta; area-normalized subtraction)</td></tr>
+    <tr><td>a</td><td>Add Peak Banana (W) vertex at cursor on 2D matrix (gold); polygon auto-closes; Enter applies</td></tr>
+    <tr><td>b</td><td>Add Background Banana (B) vertex at cursor on 2D matrix (magenta; area-normalized subtraction); polygon auto-closes; Enter applies; in 1D: set background region</td></tr>
     <tr><td>Z / z</td><td>Cancel pending limit, clear active 1D coincidence gate, or clear Banana ROIs</td></tr>
     <tr><td>M / m</td><td>Toggle left menu panel (collapse / expand)</td></tr>
     <tr><td>Drag Divider</td><td>Adjust width of 2D matrix vs 1D projections (double-click to reset)</td></tr>
@@ -1659,6 +1659,8 @@
       bananaMode = null;
       bananaPolygonPeak = [];
       bananaPolygonBg = [];
+      bananaRoiActive = false;
+      bananaRoiResult = null;
       isMouseOver2D = false;
       currentHoveredPanel = '1d-0';
     }
@@ -1828,6 +1830,7 @@
       }
 
       const changedDimension = Boolean(metadata && metadata.is_1d) !== Boolean(data.is_1d);
+      const hadBananas = (bananaPolygonPeak && bananaPolygonPeak.length > 0) || (bananaPolygonBg && bananaPolygonBg.length > 0) || bananaRoiActive;
       metadata = data;
       updateMatrixUI();
 
@@ -1848,6 +1851,13 @@
 
       // Re-apply all persistent 1D and 2D fits under new matrix conditions
       if (!changedDimension) await reapplyAllPersistentFits();
+
+      // Re-apply 2D Banana ROIs so results cycle with the active matrix
+      if (changedDimension) {
+        if (hadBananas) showMatrixToast("Matrix dimensions changed — Banana ROIs were cleared");
+      } else if (hadBananas) {
+        await requestBananaRoi();
+      }
 
       render2D();
       renderBoth1DSpectra();
@@ -2803,10 +2813,10 @@
     bananaMode = type;
     if (type === 'peak') {
       bananaPolygonPeak = [];
-      showMatrixToast("Click points on 2D matrix to draw Peak Banana ROI (W)");
+      showMatrixToast("Press 'a' to add Peak Banana (W) points — Enter applies the gate");
     } else {
       bananaPolygonBg = [];
-      showMatrixToast("Click points on 2D matrix to draw Background Banana ROI (B)");
+      showMatrixToast("Press 'b' to add Background Banana (B) points — Enter applies the gate");
     }
     updateBananaUI();
     render2D();
@@ -2825,11 +2835,11 @@
       if (bananaMode === 'peak') {
         btnPeak.style.background = '#ffd600';
         btnPeak.style.color = '#000';
-        btnPeak.innerText = 'Close Peak Banana (Click Start)';
+        btnPeak.innerText = 'Finish Peak Banana (Enter)';
       } else {
         btnPeak.style.background = '#33691e';
         btnPeak.style.color = '#ccff90';
-        btnPeak.innerText = 'Draw Peak [Shift+G]';
+        btnPeak.innerText = 'Draw Peak [a]';
       }
     }
 
@@ -2837,11 +2847,11 @@
       if (bananaMode === 'bg') {
         btnBg.style.background = '#ff4081';
         btnBg.style.color = '#fff';
-        btnBg.innerText = 'Close Bg Banana (Click Start)';
+        btnBg.innerText = 'Finish Bg Banana (Enter)';
       } else {
         btnBg.style.background = '#880e4f';
         btnBg.style.color = '#f8bbd0';
-        btnBg.innerText = 'Draw Bg [Shift+B]';
+        btnBg.innerText = 'Draw Bg [b]';
       }
     }
 
@@ -2893,15 +2903,7 @@
     showMatrixToast("Banana ROIs cleared");
   }
 
-  async function applyBananaROI() {
-    const hasPeak = (bananaPolygonPeak && bananaPolygonPeak.length >= 3);
-    const hasBg = (bananaPolygonBg && bananaPolygonBg.length >= 3);
-
-    if (!hasPeak && !hasBg) {
-      showMatrixToast("Banana polygon must contain at least 3 vertices", true);
-      return;
-    }
-
+  async function requestBananaRoi() {
     try {
       const pStr = encodeURIComponent(JSON.stringify(bananaPolygonPeak));
       const bStr = encodeURIComponent(JSON.stringify(bananaPolygonBg));
@@ -2911,21 +2913,57 @@
       if (data.success) {
         bananaRoiActive = true;
         bananaRoiResult = data;
-        bananaMode = null;
         updateBananaUI();
         render2D();
 
+        const saved = (data.saved_files && data.saved_files.length) ? ` — saved ${data.saved_files.join(', ')}` : '';
         if (data.has_bg) {
-          showMatrixToast(`Banana ROI: Peak (${data.pixel_count_peak} px) - Bg (${data.pixel_count_bg} px, scale ${data.scale.toFixed(3)}) => Net ${Math.round(data.net_counts).toLocaleString()} cts`);
+          showMatrixToast(`Banana ROI: Peak (${data.pixel_count_peak} px) - Bg (${data.pixel_count_bg} px, scale ${data.scale.toFixed(3)}) => Net ${Math.round(data.net_counts).toLocaleString()} cts${saved}`);
         } else {
-          showMatrixToast(`Peak Banana ROI: ${data.total_counts.toLocaleString()} cts (${data.pixel_count_peak} px)`);
+          showMatrixToast(`Peak Banana ROI: ${data.total_counts.toLocaleString()} cts (${data.pixel_count_peak} px)${saved}`);
         }
+        return true;
       } else {
         showMatrixToast(data.error || "Banana ROI calculation failed", true);
+        return false;
       }
     } catch (e) {
       console.error("Banana ROI request failed:", e);
+      return false;
     }
+  }
+
+  async function applyBananaROI() {
+    const hasPeak = (bananaPolygonPeak && bananaPolygonPeak.length >= 3);
+    const hasBg = (bananaPolygonBg && bananaPolygonBg.length >= 3);
+
+    if (!hasPeak && !hasBg) {
+      showMatrixToast("Banana polygon must contain at least 3 vertices", true);
+      return;
+    }
+
+    const ok = await requestBananaRoi();
+    if (ok) {
+      bananaMode = null;
+      updateBananaUI();
+      render2D();
+    }
+  }
+
+  function addBananaPointAtCursor(type) {
+    if (metadata?.is_1d) return;
+    const activePoly = (type === 'peak') ? bananaPolygonPeak : bananaPolygonBg;
+
+    if (bananaMode !== type) {
+      toggleBananaMode(type);
+    }
+    const pt = { x: Math.round(cursorChannel.x), y: Math.round(cursorChannel.y) };
+    // Ignore duplicate vertices (e.g. pressing 'a' twice without moving the cursor)
+    const last = activePoly[activePoly.length - 1];
+    if (last && last.x === pt.x && last.y === pt.y) return;
+    if (type === 'peak') bananaPolygonPeak.push(pt); else bananaPolygonBg.push(pt);
+    updateBananaUI();
+    render2D();
   }
 
   async function fetch1DProjection() {
@@ -3354,22 +3392,20 @@
         const pt = chToPx2D(poly[i].x, poly[i].y);
         ctx2d.lineTo(pt.x, pt.y);
       }
-      if (!isDrawing) ctx2d.closePath();
+      ctx2d.closePath();
 
       ctx2d.strokeStyle = strokeColor;
       ctx2d.lineWidth = 2.0;
-      if (!isDrawing) {
-        ctx2d.fillStyle = fillColor;
-        ctx2d.fill();
-      }
+      ctx2d.fillStyle = fillColor;
+      ctx2d.fill();
       ctx2d.stroke();
 
       // Vertices
       for (let i = 0; i < poly.length; i++) {
         const pt = chToPx2D(poly[i].x, poly[i].y);
-        ctx2d.fillStyle = (i === 0 && isDrawing) ? '#00e676' : vertColor;
+        ctx2d.fillStyle = vertColor;
         ctx2d.beginPath();
-        ctx2d.arc(pt.x, pt.y, (i === 0 && isDrawing) ? 5 : 3.5, 0, 2 * Math.PI);
+        ctx2d.arc(pt.x, pt.y, 3.5, 0, 2 * Math.PI);
         ctx2d.fill();
         ctx2d.strokeStyle = '#fff';
         ctx2d.lineWidth = 1;
@@ -6895,7 +6931,7 @@
       if (handleBrowserKeyDown(e)) return;
 
       const k = e.key.toLowerCase();
-      const isShortcut = ['arrowleft', 'arrowright', 'arrowdown', 'arrowup', 'e', 'f', 'q', '=', '+', 'v', 'g', 'c', '1', '2', '4', 'l', '?', 'h', 'escape', 'm', 'w', 'x', 'b', 'i', 'z', 'p', 'r', '[', ']'].includes(k);
+      const isShortcut = ['arrowleft', 'arrowright', 'arrowdown', 'arrowup', 'e', 'f', 'q', '=', '+', 'v', 'g', 'c', '1', '2', '4', 'l', '?', 'h', 'escape', 'm', 'w', 'x', 'a', 'b', 'i', 'z', 'p', 'r', '[', ']'].includes(k);
       if (isShortcut) {
         e.preventDefault();
         unfocusControls();
@@ -6943,9 +6979,14 @@
       else if (e.key === '=' || e.key === '+') clearAllFits();
       else if (e.key === 'w' || e.key === 'W') { if (!metadata?.is_1d) handleGateKeyPress('w'); }
       else if (e.key === 'x' || e.key === 'X') { if (!metadata?.is_1d) handleGateKeyPress('x'); }
+      else if (e.key === 'a' || e.key === 'A') {
+        if (!metadata?.is_1d && (targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-')))) {
+          addBananaPointAtCursor('peak');
+        }
+      }
       else if (e.key === 'b' || e.key === 'B') {
-        if (e.shiftKey || targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {
-          toggleBananaMode('bg');
+        if (!metadata?.is_1d && (targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-')))) {
+          addBananaPointAtCursor('bg');
         } else {
           handleFitBgKeyPress();
         }
@@ -6968,9 +7009,7 @@
         }
       }
       else if (e.key === 'g' || e.key === 'G') {
-        if (e.shiftKey && !metadata?.is_1d) {
-          toggleBananaMode('peak');
-        } else if (!e.shiftKey) {
+        if (!e.shiftKey) {
           let activeAxis = null;
           let activeCh = null;
           if (hovered1DAxis === 0 && cursor1DChannelX !== null) {
@@ -7255,7 +7294,6 @@
     });
 
     canvas2d.addEventListener('mousedown', (e) => {
-      if (bananaMode) return;
       if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       const rect = canvas2d.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -7266,27 +7304,6 @@
     });
 
     canvas2d.addEventListener('click', (e) => {
-      if (bananaMode) {
-        const rect = canvas2d.getBoundingClientRect();
-        const ch = pxToCh2D(e.clientX - rect.left, e.clientY - rect.top);
-        const pt = { x: Math.round(ch.x), y: Math.round(ch.y) };
-
-        const activePoly = (bananaMode === 'peak') ? bananaPolygonPeak : bananaPolygonBg;
-        if (activePoly.length >= 3) {
-          const p0 = activePoly[0];
-          const dist = Math.hypot(pt.x - p0.x, pt.y - p0.y);
-          const spanX = view.x1 - view.x0;
-          if (dist < spanX * 0.035) {
-            bananaMode = null;
-            applyBananaROI();
-            return;
-          }
-        }
-        activePoly.push(pt);
-        render2D();
-        return;
-      }
-
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) {
         e.preventDefault();
         const rect = canvas2d.getBoundingClientRect();
