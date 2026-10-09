@@ -810,6 +810,10 @@
       <div style="display:flex; gap:6px; margin-top:4px;">
         <button class="secondary" style="flex:1;" onclick="clearBananaGate()">Clear Bananas [Z]</button>
       </div>
+      <div style="display:flex; gap:6px; margin-top:4px;">
+        <button id="btnSaveBanana" class="secondary" style="flex:1;" onclick="saveBananasToFile()" title="Save drawn banana polygon(s) as .ban file(s) in the server working directory">Save Banana</button>
+        <button id="btnLoadBanana" class="secondary" style="flex:1;" onclick="openServerBrowser('banana')" title="Browse .ban files on the server; Peak/Background is recognized from the header">Load Banana</button>
+      </div>
       <div id="bananaInfoBox" style="margin-top:6px; padding:6px; background:#181818; border:1px solid #333; border-radius:4px; font-size:0.72rem; color:#ddd; font-family:monospace; line-height:1.4; display:none;">
       </div>
     </div>
@@ -1128,7 +1132,7 @@
       <tr><td><kbd>F</kbd> / <kbd>f</kbd></td><td>Full matrix / spectrum view reset</td></tr>
       <tr><td><kbd>a</kbd></td><td>Add Peak Banana Gate vertex at cursor on 2D plane (W); polygon auto-closes, <kbd>Enter</kbd> applies</td></tr>
       <tr><td><kbd>b</kbd></td><td>Add Background Banana Gate vertex at cursor on 2D plane (B); polygon auto-closes, <kbd>Enter</kbd> applies</td></tr>
-      <tr><td><kbd>W</kbd> / <kbd>w</kbd></td><td>Set 1D Coincidence Peak Gate (Limit 1, Limit 2)</td></tr>
+      <tr><td><kbd>W</kbd> / <kbd>w</kbd></td><td>Over 1D spectrum: Set 1D Coincidence Peak Gate (Limit 1, Limit 2); over 2D plane: save banana files to the working directory</td></tr>
       <tr><td><kbd>X</kbd> / <kbd>x</kbd></td><td>Set 1D Coincidence Background Gate (Limit 1, Limit 2)</td></tr>
       <tr><td><kbd>Z</kbd> / <kbd>z</kbd></td><td>Cancel pending gate or clear active 1D / 2D gates</td></tr>
       <tr><td><kbd>B</kbd> / <kbd>b</kbd></td><td>In 1D: Set background region; In 2D: Add Background Banana point at cursor (starts drawing if none active)</td></tr>
@@ -1155,7 +1159,7 @@
 <div class="browser-modal" id="serverBrowserModal">
   <div class="browser-header">
     <h2>
-      <span>📁 Server 3D Matrix Browser</span>
+      <span id="browserTitleText">📁 Server 3D Matrix Browser</span>
       <span id="browserItemCount" class="badge" style="background:#1e293b; color:#00e5ff; font-size:0.7rem; font-weight:normal;">-</span>
     </h2>
     <button id="btnBrowserClose" class="fit-btn-close" style="font-size: 1rem; padding: 2px 8px;" title="Close [Esc]" onclick="closeServerBrowser()">✕</button>
@@ -1376,7 +1380,8 @@
     entries: [],
     selectedEntry: null,
     filterText: '',
-    cmatOnly: true
+    cmatOnly: true,
+    mode: 'matrix' // 'matrix' or 'banana'
   };
 
   // --- Utility Functions ---
@@ -2328,6 +2333,86 @@
     if (type === 'peak') bananaPolygonPeak.push(pt); else bananaPolygonBg.push(pt);
     updateBananaUI();
     render2D();
+  }
+
+  // --- Banana .ban Save / Load (save goes to the server working directory) ---
+  async function saveBananasToFile() {
+    const hasPeak = bananaPolygonPeak && bananaPolygonPeak.length >= 3;
+    const hasBg = bananaPolygonBg && bananaPolygonBg.length >= 3;
+    if (!hasPeak && !hasBg) {
+      showMatrixToast('No banana polygon (>= 3 vertices) to save', true);
+      return;
+    }
+    try {
+      const pStr = encodeURIComponent(JSON.stringify(hasPeak ? bananaPolygonPeak : []));
+      const bStr = encodeURIComponent(JSON.stringify(hasBg ? bananaPolygonBg : []));
+      const res = await fetch(`/api/save_banana?plane=${activePlane}&polygon_peak=${pStr}&polygon_bg=${bStr}`);
+      const data = await res.json();
+      if (data.success && data.saved_files && data.saved_files.length) {
+        showMatrixToast(`Saved ${data.saved_files.join(', ')} in the working directory`);
+      } else {
+        showMatrixToast(data.error || 'No banana files saved', true);
+      }
+    } catch (e) {
+      console.error('Banana save failed:', e);
+      showMatrixToast('Banana save request failed', true);
+    }
+  }
+
+  function _parseBanFile(text) {
+    let type = null;
+    const pts = [];
+    for (const raw of String(text).split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (line.startsWith('#')) {
+        const l = line.toLowerCase();
+        // Auto-recognize Peak vs Background from the header
+        if (l.includes('background')) type = 'bg';
+        else if (l.includes('peak')) type = 'peak';
+        continue;
+      }
+      const parts = line.split(/[\s,;]+/).map(parseFloat);
+      if (parts.length >= 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1])) {
+        pts.push({ x: Math.round(parts[0]), y: Math.round(parts[1]) });
+      }
+    }
+    return { type, pts };
+  }
+
+  function _applyBananaText(text, name) {
+    const { type, pts } = _parseBanFile(text);
+    if (!type) {
+      showMatrixToast('Unrecognized banana file: header must say Peak or Background', true);
+      return;
+    }
+    if (pts.length < 3) {
+      showMatrixToast('Banana file needs at least 3 vertex lines', true);
+      return;
+    }
+    if (type === 'peak') bananaPolygonPeak = pts; else bananaPolygonBg = pts;
+    bananaMode = null;
+    updateBananaUI();
+    render2D();
+    showMatrixToast(`Loaded ${type === 'peak' ? 'Peak' : 'Background'} banana (${pts.length} vertices) from ${name} — applying`);
+    applyBananaGate();
+    saveBananaState(); // keep the per-plane store in sync
+  }
+
+  async function loadBananaFromServerPath(path) {
+    try {
+      const res = await fetch(`/api/get_banana?path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+      if (data.success) {
+        closeServerBrowser();
+        await _applyBananaText(data.text, data.name);
+      } else {
+        showMatrixToast(data.error || 'Failed to read banana file', true);
+      }
+    } catch (e) {
+      console.error('Banana load failed:', e);
+      showMatrixToast('Failed to read banana file from server', true);
+    }
   }
 
   // --- Peak Finding & Fitting (1D & 2D) ---
@@ -4410,12 +4495,30 @@
   window.quitViewer = quitViewer;
 
   // --- File Browser Implementation ---
-  async function openServerBrowser() {
+  async function openServerBrowser(mode = 'matrix') {
     const modal = document.getElementById('serverBrowserModal');
     const backdrop = document.getElementById('browserBackdrop');
     if (!modal) return;
+
+    browserState.mode = mode;
+    const titleSpan = document.getElementById('browserTitleText');
+    if (titleSpan) titleSpan.innerText = (mode === 'banana') ? '🍌 Server Banana Browser' : '📁 Server 3D Matrix Browser';
+    const filterInp = document.getElementById('browserFilterInput');
+    if (filterInp) filterInp.placeholder = (mode === 'banana') ? '🔍 Filter .ban files by name (e.g. p130, b227)...' : '🔍 Filter matrices by name (e.g. GeE, Rings, cmat)...';
+    const chkCmat = document.getElementById('chkBrowserCmatOnly');
+    if (chkCmat) {
+      chkCmat.disabled = (mode === 'banana');
+      chkCmat.checked = (mode !== 'banana');
+    }
+    const btnSubmit = document.getElementById('btnBrowserOpenSubmit');
+    if (btnSubmit) {
+      btnSubmit.disabled = true;
+      btnSubmit.innerText = (mode === 'banana') ? 'Load Banana' : 'Open Matrix';
+    }
+
     modal.style.display = 'flex';
     if (backdrop) backdrop.style.display = 'block';
+    // Banana files are saved in the server working directory, so start there
     await fetchBrowsePath('');
   }
 
@@ -4454,8 +4557,9 @@
     const tbody = document.getElementById('browserTableBody');
     if (!tbody) return;
     tbody.innerHTML = '';
+    const bananaMode = (browserState.mode === 'banana');
     const q = (document.getElementById('browserFilterInput')?.value || '').toLowerCase().trim();
-    const cmatOnly = document.getElementById('chkBrowserCmatOnly')?.checked;
+    const cmatOnly = !bananaMode && document.getElementById('chkBrowserCmatOnly')?.checked;
 
     const filtered = (browserState.entries || []).filter(e => {
       if (cmatOnly && !e.is_dir && !e.is_cmat) return false;
@@ -4464,15 +4568,23 @@
     });
 
     const badge = document.getElementById('browserItemCount');
-    if (badge) badge.innerText = `${filtered.length} items`;
+    if (badge) {
+      const banCount = filtered.filter(e => e.is_ban).length;
+      badge.innerText = bananaMode ? `${banCount} bananas (${filtered.length} total)` : `${filtered.length} items`;
+    }
 
     filtered.forEach(item => {
       const tr = document.createElement('tr');
       tr.style.cursor = 'pointer';
-      tr.className = 'browser-row';
-      const icon = item.is_dir ? '📁' : '📊';
+      const selectable = bananaMode ? (item.is_dir || item.is_ban) : (item.is_dir || item.is_cmat);
+      tr.className = 'browser-row' + (!selectable ? ' disabled' : '');
+      const icon = item.is_dir ? '📁' : (bananaMode ? (item.is_ban ? '🍌' : '📄') : '📊');
+      const nameColor = selectable ? (item.is_ban ? '#ffd600' : '#00e5ff') : '#94a3b8';
+      const nameWeight = selectable ? 'font-weight:600;' : '';
+      const banBadge = (bananaMode && item.is_ban)
+        ? `<span class="badge" style="background: rgba(255, 214, 0, 0.18); color: #ffd600; border: 1px solid rgba(255, 214, 0, 0.4); font-size: 0.65rem; padding: 1px 5px; margin-left: 6px;">BAN</span>` : '';
       tr.innerHTML = `
-        <td style="padding:4px 6px;">${icon} ${item.name}</td>
+        <td style="padding:4px 6px;"><span style="font-size:1.05rem;">${icon}</span> <span style="color:${nameColor}; ${nameWeight}">${item.name}</span>${banBadge}</td>
         <td style="padding:4px 6px; text-align:right; color:#888;">${item.size_str || '-'}</td>
         <td style="padding:4px 6px; text-align:right; color:#888;">${item.modified_str || '-'}</td>
       `;
@@ -4481,24 +4593,32 @@
         tr.style.background = '#1e3a5f';
         browserState.selectedEntry = item;
         const subBtn = document.getElementById('btnBrowserOpenSubmit');
-        if (subBtn) subBtn.disabled = item.is_dir;
+        if (subBtn) subBtn.disabled = !selectable;
         const lbl = document.getElementById('browserSelectedLabel');
-        if (lbl) lbl.innerText = item.name;
+        if (lbl) lbl.innerText = item.is_dir ? `[Folder] ${item.name}` : item.name;
       });
       tr.addEventListener('dblclick', () => {
         if (item.is_dir) fetchBrowsePath(item.path);
-        else submitOpenMatrix();
+        else if (selectable) submitOpenMatrix(item.path);
       });
       tbody.appendChild(tr);
     });
   }
   window.renderBrowserEntries = renderBrowserEntries;
 
-  async function submitOpenMatrix() {
-    if (!browserState.selectedEntry || browserState.selectedEntry.is_dir) return;
-    const p = browserState.selectedEntry.path;
+  async function submitOpenMatrix(pathStr) {
+    const target = pathStr || (browserState.selectedEntry ? browserState.selectedEntry.path : null);
+    if (!target) return;
+    if (!pathStr && browserState.selectedEntry && browserState.selectedEntry.is_dir) {
+      await fetchBrowsePath(target);
+      return;
+    }
+    if (browserState.mode === 'banana') {
+      await loadBananaFromServerPath(target);
+      return;
+    }
     try {
-      const res = await fetch(`/api/open_file?path=${encodeURIComponent(p)}`);
+      const res = await fetch(`/api/open_file?path=${encodeURIComponent(target)}`);
       const data = await res.json();
       if (data.loaded) {
         closeServerBrowser();
@@ -5105,7 +5225,14 @@
       else if (k === 'm') toggleSidebar();
       else if (k === 'q') quitViewer();
       else if (e.key === '=' || e.key === '+') clearAllFits();
-      else if (k === 'w') handleGateKeyPress('w');
+      else if (k === 'w') {
+        if (hovered1DAxis === null && !(focusedPanel && focusedPanel.startsWith('1d-'))) {
+          // Cursor/focus on the 2D plane: 'w' saves banana files on demand
+          saveBananasToFile();
+        } else {
+          handleGateKeyPress('w');
+        }
+      }
       else if (k === 'x') handleGateKeyPress('x');
       else if (k === 'a') {
         if (targetPanel === '2d' || (isMouseOver2D && !targetPanel.startsWith('1d-'))) {

@@ -2525,38 +2525,61 @@ def _banana_energy_pair(res: dict, key: str, session=None) -> tuple:
     return cx, cy, False
 
 
+_BANANA_SAVE_LOCK = threading.Lock()
+_BANANA_SAVE_STATE = {"peak_stem": None, "next_bg_index": 1}
+
+
 def save_banana_files(res: dict, session=None, matrix_name: str = "") -> list:
     """
     Save peak/background banana polygons as 'p<E1>-<E2>.ban' / 'b<E1>-<E2>.ban' text files, where
     E1/E2 are the calibrated x/y centroid coordinates of the polygon as integers (no decimal points).
     Each file lists one 'x y' vertex pair per line in matrix channel coordinates, so it can be
     re-loaded later. Files are written to the server working directory.
+
+    Background files are named after the most recently saved peak banana's coordinates so the pair
+    is associated: the first background saved after a peak becomes 'b<peak E1>-<E2>.ban', and each
+    additional background saved before the next peak gets an incrementing index
+    ('b<peak E1>-<E2>_2.ban', '_3.ban', ...). Saving a (new) peak resets the background indexing.
+    If no peak has been saved yet in this server session, the background file falls back to its
+    own centroid coordinates.
     Returns the list of created filenames.
     """
     saved = []
-    for key, prefix, label in (("polygon_peak", "p", "Peak"), ("polygon_bg", "b", "Background")):
-        pts = res.get(key) or []
-        if len(pts) < 3:
-            continue
-        e1, e2, is_cal = _banana_energy_pair(res, key, session=session)
-        filename = f"{prefix}{int(round(e1))}-{int(round(e2))}.ban"
-        unit = "keV" if is_cal else "ch"
-        try:
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(
-                    f"# CMAT {label} Banana gate | Matrix: {matrix_name} | "
-                    f"Centroid: ({e1:.2f}, {e2:.2f}) {unit} | "
-                    f"Saved: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                )
-                for p in pts:
-                    if isinstance(p, dict):
-                        vx, vy = float(p.get("x", p.get(0, 0))), float(p.get("y", p.get(1, 0)))
-                    else:
-                        vx, vy = float(p[0]), float(p[1])
-                    f.write(f"{vx:.1f} {vy:.1f}\n")
-            saved.append(filename)
-        except Exception as e:
-            print(f"[!] Error saving banana file {filename}: {e}", file=sys.stderr)
+    with _BANANA_SAVE_LOCK:
+        for key, prefix, label in (("polygon_peak", "p", "Peak"), ("polygon_bg", "b", "Background")):
+            pts = res.get(key) or []
+            if len(pts) < 3:
+                continue
+            e1, e2, is_cal = _banana_energy_pair(res, key, session=session)
+            if label == "Peak":
+                stem = f"{int(round(e1))}-{int(round(e2))}"
+                _BANANA_SAVE_STATE["peak_stem"] = stem
+                _BANANA_SAVE_STATE["next_bg_index"] = 1
+                filename = f"p{stem}.ban"
+            elif _BANANA_SAVE_STATE.get("peak_stem"):
+                idx = _BANANA_SAVE_STATE["next_bg_index"]
+                suffix = "" if idx == 1 else f"_{idx}"
+                filename = f"b{_BANANA_SAVE_STATE['peak_stem']}{suffix}.ban"
+                _BANANA_SAVE_STATE["next_bg_index"] = idx + 1
+            else:
+                filename = f"b{int(round(e1))}-{int(round(e2))}.ban"
+            unit = "keV" if is_cal else "ch"
+            try:
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(
+                        f"# CMAT {label} Banana gate | Matrix: {matrix_name} | "
+                        f"Centroid: ({e1:.2f}, {e2:.2f}) {unit} | "
+                        f"Saved: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    )
+                    for p in pts:
+                        if isinstance(p, dict):
+                            vx, vy = float(p.get("x", p.get(0, 0))), float(p.get("y", p.get(1, 0)))
+                        else:
+                            vx, vy = float(p[0]), float(p[1])
+                        f.write(f"{vx:.1f} {vy:.1f}\n")
+                saved.append(filename)
+            except Exception as e:
+                print(f"[!] Error saving banana file {filename}: {e}", file=sys.stderr)
     return saved
 
 
@@ -5871,6 +5894,7 @@ def browse_filesystem(req_path: str = "") -> dict:
                         is_dir = entry.is_dir(follow_symlinks=True)
                         is_cmat = (not is_dir) and entry.name.lower().endswith((".cmat", ".root"))
                         is_root_matrix = (not is_dir) and entry.name.lower().endswith(".root")
+                        is_ban = (not is_dir) and entry.name.lower().endswith(".ban")
                         is_txt = (not is_dir) and entry.name.lower().endswith(".txt")
                         is_fit = (not is_dir) and (entry.name.lower().startswith("fit_results") or (is_txt and "fit" in entry.name.lower()))
                         size = 0
@@ -5889,6 +5913,7 @@ def browse_filesystem(req_path: str = "") -> dict:
                             "is_dir": is_dir,
                             "is_cmat": is_cmat,
                             "is_root_matrix": is_root_matrix,
+                            "is_ban": is_ban,
                             "is_txt": is_txt,
                             "is_fit": is_fit,
                             "size": size,
@@ -5928,6 +5953,18 @@ def browse_filesystem(req_path: str = "") -> dict:
             "error": str(e),
             "current_path": str(Path.cwd().resolve()),
         }
+
+
+def read_banana_file(path: str) -> dict:
+    """Read a .ban banana gate file from the server filesystem (server-side banana browser)."""
+    try:
+        p = Path(path).expanduser().resolve()
+        if p.suffix.lower() != ".ban" or not p.is_file():
+            return {"success": False, "error": f"Not a .ban file: {p.name}"}
+        text = p.read_text(encoding="utf-8")
+        return {"success": True, "name": p.name, "path": str(p), "text": text}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 class CMATWebHandler(BaseHTTPRequestHandler):
@@ -6136,6 +6173,15 @@ class CMATWebHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(res_data).encode("utf-8"))
 
+        elif self.path.startswith("/api/get_banana"):
+            from urllib.parse import urlparse, parse_qs
+            req_path = parse_qs(urlparse(self.path).query).get("path", [""])[0]
+            res_data = read_banana_file(req_path)
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res_data).encode("utf-8"))
+
         elif self.path.startswith("/api/root_histograms"):
             from urllib.parse import urlparse, parse_qs
             req_path = parse_qs(urlparse(self.path).query).get("path", [""])[0]
@@ -6326,12 +6372,46 @@ class CMATWebHandler(BaseHTTPRequestHandler):
                 if res.get("pixel_count_peak", 0) > 0 or res.get("pixel_count_bg", 0) > 0:
                     print_banana_roi_terminal_report_2d(res, self.reader.filename.name, self.matrix.shape)
                     session = self.get_session()
-                    res["saved_files"] = save_banana_files(res, session=session, matrix_name=self.reader.filename.name)
                     if session.fit_log_enabled:
                         append_banana_result_to_file(res, session=session, matrix_name=self.reader.filename.name, filepath=session.fit_log_filename)
                 elif len(polygon_peak) >= 3 or len(polygon_bg) >= 3:
                     sh_y, sh_x = self.matrix.shape[:2]
                     print(f"[!] 2D Banana ROI falls outside {self.reader.filename.name} ({sh_x}×{sh_y}): no pixels selected.", flush=True)
+
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif self.path.startswith("/api/save_banana"):
+            if not self.reader:
+                self.send_error(404, "No matrix loaded")
+                return
+
+            from urllib.parse import urlparse, parse_qs
+            query = parse_qs(urlparse(self.path).query)
+            poly_peak_str = query.get("polygon_peak", ["[]"])[0]
+            poly_bg_str = query.get("polygon_bg", ["[]"])[0]
+            try:
+                polygon_peak = json.loads(poly_peak_str)
+            except Exception:
+                polygon_peak = []
+            try:
+                polygon_bg = json.loads(poly_bg_str)
+            except Exception:
+                polygon_bg = []
+
+            if len(polygon_peak) < 3 and len(polygon_bg) < 3:
+                res = {"success": False, "error": "No banana polygon with at least 3 vertices to save"}
+            else:
+                res = {"polygon_peak": polygon_peak, "polygon_bg": polygon_bg}
+                try:
+                    saved = save_banana_files(res, session=self.get_session(), matrix_name=self.reader.filename.name)
+                    res = {"success": True, "saved_files": saved}
+                    print(f"Banana files saved: {', '.join(saved)}", flush=True)
+                except Exception as e:
+                    print(f"[!] Error saving banana files: {e}", file=sys.stderr)
+                    res = {"success": False, "error": str(e)}
 
             self.send_response(200)
             self.send_header("Content-type", "application/json")

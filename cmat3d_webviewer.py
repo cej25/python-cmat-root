@@ -58,6 +58,7 @@ from cmat_webviewer import (
     generate_pdf_1d,
     generate_pdf_2d,
     browse_filesystem,
+    read_banana_file,
     get_local_ip,
     is_ssh_session,
     launch_browser,
@@ -855,11 +856,46 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
                     print_banana_gate_terminal_report_3d(res, m["filename"])
                     cal = _PlaneCalAdapter(session, plane)
                     matrix_label = f"{m['filename']} (plane {plane})"
-                    res["saved_files"] = save_banana_files(res, session=cal, matrix_name=matrix_label)
                     if session.fit_log_enabled:
                         append_banana_result_to_file(res, session=cal, matrix_name=matrix_label, filepath=session.fit_log_filename)
                 elif len(polygon_peak) >= 3 or len(polygon_bg) >= 3:
                     print(f"[!] 2D Banana gate falls outside {m['filename']} (plane {plane}): no pixels selected.", flush=True)
+
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+
+        elif path == "/api/save_banana":
+            if not reader:
+                self.send_error(404, "No matrix loaded")
+                return
+
+            plane = query.get("plane", [session.active_plane])[0]
+            poly_peak_str = query.get("polygon_peak", ["[]"])[0]
+            poly_bg_str = query.get("polygon_bg", ["[]"])[0]
+            try:
+                polygon_peak = json.loads(poly_peak_str)
+            except Exception:
+                polygon_peak = []
+            try:
+                polygon_bg = json.loads(poly_bg_str)
+            except Exception:
+                polygon_bg = []
+
+            if len(polygon_peak) < 3 and len(polygon_bg) < 3:
+                res = {"success": False, "error": "No banana polygon with at least 3 vertices to save"}
+            else:
+                res = {"polygon_peak": polygon_peak, "polygon_bg": polygon_bg}
+                try:
+                    cal = _PlaneCalAdapter(session, plane)
+                    matrix_label = f"{m['filename']} (plane {plane})"
+                    saved = save_banana_files(res, session=cal, matrix_name=matrix_label)
+                    res = {"success": True, "saved_files": saved}
+                    print(f"Banana files saved: {', '.join(saved)}", flush=True)
+                except Exception as e:
+                    print(f"[!] Error saving banana files: {e}", file=sys.stderr)
+                    res = {"success": False, "error": str(e)}
 
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -1331,6 +1367,14 @@ class CMAT3DWebHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/browse_fs"):
             req_path = query.get("path", [""])[0]
             res_data = browse_filesystem(req_path)
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(res_data).encode("utf-8"))
+
+        elif path.startswith("/api/get_banana"):
+            req_path = query.get("path", [""])[0]
+            res_data = read_banana_file(req_path)
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()

@@ -48,7 +48,7 @@
 - **Fit Results Logging**: Appends 1D and 2D fit results to a fixed-width text file (`fit_results_<timestamp>.txt`). Toggled from the UI, the CLI flag (`--fit-log`), or a macro command (`fit_log`).
 - **Half-Life Fitting (`halflife.py`)**: Fits exponential decays convolved with a Gaussian prompt response (IRF) plus a constant background. The pop-up can take the current spectrum directly from the 2D webviewer, mirror reversed decays, and switch log/linear scales.
 - **ENSDF Isotope Identification**: Searches gamma-ray energies and coincidence cascades against a local, offline copy of the ENSDF database (all mass chains, SQLite-indexed), then groups the matches to propose the smallest consistent set of isotopes. Available as a web pop-up with a file browser, or from the command line.
-- **Coincidence & Banana Gating**: Peak ($W$) and background ($X$) gates with automatic channel normalization, plus polygonal "Banana" ROIs (`a` peak / `b` background vertices at the cursor — auto-saved as `.ban` files and loggable to the results file) for 2D area analysis and 3D projection cuts.
+- **Coincidence & Banana Gating**: Peak ($W$) and background ($X$) gates with automatic channel normalization, plus polygonal "Banana" ROIs (`a` peak / `b` background vertices at the cursor — saved as `.ban` files on demand via the Save Banana button or `w` over the 2D matrix, and loggable to the results file) for 2D area analysis and 3D projection cuts.
 - **Multi-Matrix Comparison**: Cycle between loaded matrices (`[` / `]`) with zoom, gates, and peak fits kept consistent for differential analysis.
 - **Headless Operation**: Run analyses via macro scripts (`*.mac`), one-shot CLI commands (`-c`), or an interactive shell (`-i`).
 - **PDF Export**: Vector PDF figures with calibrated keV axes, fit curves, baselines, and labeled centroids.
@@ -212,8 +212,8 @@ net_spec, bg_spec = reader3d.get_gate_1d(target_axis=0, w_gates={2: [[11, 11]]})
 | **Clear Fits & Marks**| `=` or `+` | Clear all active persistent peak fits, curves, and centroid markers |
 | **Coincidence Gate** | `W` (Peak) / `X` (BG) | Set peak and background coincidence gate limits on 1D spectrum |
 | **Clear Gate / Bananas**| `Z` | Clear active 1D coincidence gates and 2D Banana gates/ROIs |
-| **Peak Banana ROI** | `a` | Add 2D peak polygon (W) vertex at the cursor: manual area integration (2D) or 3D projection cut; polygon auto-closes (last vertex connects to the first); `Enter` applies; auto-saved as `pE1-E2.ban` |
-| **Bg Banana ROI** | `b` | Add 2D bg polygon (B) vertex at the cursor: area-normalized subtraction in 2D and 3D; polygon auto-closes; `Enter` applies; auto-saved as `bE1-E2.ban`; in 1D: set background region |
+| **Peak Banana ROI** | `a` | Add 2D peak polygon (W) vertex at the cursor: manual area integration (2D) or 3D projection cut; polygon auto-closes (last vertex connects to the first); `Enter` applies; save as `pE1-E2.ban` via Save Banana / `w` |
+| **Bg Banana ROI** | `b` | Add 2D bg polygon (B) vertex at the cursor: area-normalized subtraction in 2D and 3D; polygon auto-closes; `Enter` applies; saved as `bE1-E2.ban` paired with the last saved peak (`_2`, `_3`… for multiple); in 1D: set background region |
 | **Plane Switch (3D)** | `Plane buttons` / Select | Switch orthogonal plane (`0-1`, `0-2`, `1-2`) |
 | **Cycle Scale** | `L` | Cycle scale of focused panel (2D: Log $\rightarrow$ Lin $\rightarrow$ Pwr; 1D: Lin $\leftrightarrow$ Log); `L`/`l` also toggles linear/log in the Half-Life popup |
 | **Colormap** | `C` | Cycle colormaps (Turbo, Viridis, Plasma, Inferno, Hot, Jet, Gray) |
